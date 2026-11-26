@@ -1,19 +1,17 @@
-import importlib.util
 import io
 import pathlib
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 
+SERVER_DIR = pathlib.Path(__file__).resolve().parents[1] / "server"
+sys.path.insert(0, str(SERVER_DIR))
+
+import compact_chat as chat
 import harness_context as context
 from chat_memory import ChatMemory
 from local_files import read_shared_file, validate_excerpts
-
-
-spec = importlib.util.spec_from_file_location("compact_chat", pathlib.Path(__file__).with_name("compact-chat.py"))
-chat = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(chat)
-
 
 class ContextTests(unittest.TestCase):
     def test_priority_and_template_budget(self):

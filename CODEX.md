@@ -10,10 +10,9 @@
 
 ## Where to continue
 
-- `.local-ai/compact-chat.py` serves the loopback chat and drives llama.cpp. `harness_context.py` uses rendered-template token counts to budget input, evidence, and output. Auto mode uses Quick for straightforward work and can escalate to thinking. Token limits, diagnostics, and hardware settings are in [HARNESS.md](.local-ai/HARNESS.md).
-- `.local-ai/chat_memory.py` stores original turns, evidence references, task state and review notes in chat-scoped SQLite FTS5. Routine turns archive without an extra inference. Original turns are the source of truth for recall and reviews.
-- `.local-ai/compact-chat.html` provides the sidebar, chat switching, live thinking, metrics and attachment controls. `reply-markdown.js` renders streamed and saved replies with local markdown-it and KaTeX. The vendor folders contain upstream notices.
-- `file-sharing.js` and `local_files.py` handle text attachments and explicit local path sharing. A Qwen folder-search proposal shows its reason and query, then waits for the user to choose a folder. The browser filters candidates and sends bounded excerpts. Web search is suppressed on file turns.
+- `server/compact_chat.py` serves the loopback chat and drives llama.cpp. `server/harness_context.py` budgets rendered-template tokens. Auto mode uses Quick for straightforward work and can escalate to thinking. See [the harness guide](docs/HARNESS.md) for settings.
+- `server/chat_memory.py` stores original turns, evidence references, task state, and review notes in chat-scoped SQLite FTS5. Routine turns archive without an extra inference.
+- `web/` contains the browser UI, sidebar, live thinking, metrics, and local Markdown and KaTeX rendering. `web/file-sharing.js` and `server/local_files.py` handle attachments and approval-based folder search. File turns suppress web search.
 - SearXNG research can run multiple bounded searches and carry forward evidence. The optional template in `.local-ai/searxng/` expects Docker or a separately supplied JSON-enabled instance. Provider behaviour was tested with a fixture. A live instance depends on local setup.
 - **Review answer** runs one explicitly requested reviewer pass on the same model. It starts with a 3,072-token working budget and can expand to the startup context. Notes are saved separately beside the draft. Changing GPU context allocation requires a server restart.
 - `.local-ai/start-aider.cmd` is an optional client for the native API. `start-chat.cmd coder` launches the older Qwen2.5-Coder 3B preset if its weights are present.
@@ -21,8 +20,8 @@
 ## Verification
 
 ```powershell
-python -E -B .\.local-ai\test_harness.py
-python -E -B .\.local-ai\benchmark_harness.py
+python -E -B .\tests\test_harness.py
+python -E -B .\benchmarks\benchmark_harness.py
 ```
 
 The benchmark uses synthetic tasks, a frozen harness baseline, and 4K on the same runner. Its saved results compare two harness revisions. Live checks have covered 8K inference, browser rendering, chat switching, local file permission and reviewer persistence. Repeat the relevant tests before updating the handoff.

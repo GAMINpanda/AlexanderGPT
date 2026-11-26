@@ -3,7 +3,7 @@ setlocal
 if /I "%~1"=="coder" goto coder
 if /I "%~1"=="4k" set "LOCAL_AI_CONTEXT=4096"
 if /I "%~1"=="8k" set "LOCAL_AI_CONTEXT=8192"
-python -E "%~dp0compact-chat.py"
+python -E "%~dp0..\server\compact_chat.py"
 exit /b %errorlevel%
 
 :coder

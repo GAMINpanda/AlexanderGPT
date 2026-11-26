@@ -18,7 +18,9 @@ from local_files import read_shared_file, validate_excerpts
 import harness_context as limits
 
 
-ROOT = Path(__file__).resolve().parent
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+RUNTIME_DIR = PROJECT_ROOT / ".local-ai"
+WEB_DIR = PROJECT_ROOT / "web"
 BACKEND = "http://127.0.0.1:8080"
 UI_HOST = "127.0.0.1:8082"
 CONTEXT_SIZE = limits.CONTEXT
@@ -629,7 +631,7 @@ class ChatHandler(BaseHTTPRequestHandler):
             "/assets/markdown-it.js": "vendor/markdown-it/markdown-it.js",
         }
         if self.path in scripts:
-            path = ROOT / scripts[self.path]
+            path = WEB_DIR / scripts[self.path]
             if path.is_file():
                 self.send_content(200, "text/javascript; charset=utf-8", path.read_bytes())
             else:
@@ -640,7 +642,7 @@ class ChatHandler(BaseHTTPRequestHandler):
             self.path,
         )
         if asset:
-            path = ROOT / "vendor" / "katex" / asset[1]
+            path = WEB_DIR / "vendor" / "katex" / asset[1]
             content_types = {".js": "text/javascript", ".css": "text/css", ".woff2": "font/woff2"}
             try:
                 self.send_content(200, content_types[path.suffix], path.read_bytes())
@@ -661,7 +663,7 @@ class ChatHandler(BaseHTTPRequestHandler):
         if self.path != "/":
             self.send_error(404)
             return
-        page = (ROOT / "compact-chat.html").read_bytes()
+        page = (WEB_DIR / "compact-chat.html").read_bytes()
         self.send_content(200, "text/html; charset=utf-8",
                           page.replace(b"{{CONTEXT_SIZE}}", f"{CONTEXT_SIZE:,}".encode()))
 
@@ -831,15 +833,15 @@ class ChatHandler(BaseHTTPRequestHandler):
 
 def main():
     global MEMORY
-    model = ROOT / "Qwen3-4B-Q4_K_M.gguf"
+    model = RUNTIME_DIR / "Qwen3-4B-Q4_K_M.gguf"
     if not model.is_file():
         raise SystemExit(f"Model file missing: {model.name}")
     if ANSWER_LIMIT + 32 >= CONTEXT_SIZE:
         raise SystemExit("Set a larger context or lower the combined reply and thinking budgets.")
-    MEMORY = ChatMemory(ROOT / "chat-memory.sqlite3")
+    MEMORY = ChatMemory(RUNTIME_DIR / "chat-memory.sqlite3")
     with ThreadingHTTPServer(("127.0.0.1", 8082), ChatHandler) as ui:
         process = subprocess.Popen([
-            str(ROOT / "runner" / "llama-server.exe"), "--model", str(model),
+            str(RUNTIME_DIR / "runner" / "llama-server.exe"), "--model", str(model),
             "--alias", MODEL, "--host", "127.0.0.1", "--port", "8080",
             "--cors-origins", "localhost", "--device", "Vulkan0", "--gpu-layers", "28",
             "--ctx-size", str(CONTEXT_SIZE), "--parallel", "1", "--jinja",

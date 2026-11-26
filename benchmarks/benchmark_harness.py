@@ -16,7 +16,9 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parent
+BENCHMARK_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = BENCHMARK_DIR.parent
+RUNTIME_DIR = PROJECT_ROOT / ".local-ai"
 CASES = [
     ("simple", "What is 14 * 6? Answer with the number only.", r"^84\.?$", False),
     ("irrelevant_history", "What port does our Glacier service use? Answer with the number only.", r"\b9467\b", True),
@@ -27,11 +29,11 @@ CASES = [
 ]
 
 
-def load(directory, name, database, backend_url):
+def load(entry, name, database, backend_url):
     original = sys.modules.pop("chat_memory", None)
-    sys.path.insert(0, str(directory))
+    sys.path.insert(0, str(entry.parent))
     try:
-        spec = importlib.util.spec_from_file_location(name, directory / "compact-chat.py")
+        spec = importlib.util.spec_from_file_location(name, entry)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
     finally:
@@ -122,7 +124,7 @@ def validate_live(module):
 def main():
     os.environ["LOCAL_AI_CONTEXT"] = "4096"
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, default=ROOT / "benchmark-results.json")
+    parser.add_argument("--output", type=Path, default=BENCHMARK_DIR / "benchmark-results.json")
     parser.add_argument("--port", type=int, default=18080)
     parser.add_argument("--variant", choices=("baseline", "optimised"))
     args = parser.parse_args()
@@ -131,11 +133,11 @@ def main():
         temp = Path(temp)
         baseline = temp / "baseline"
         baseline.mkdir()
-        with zipfile.ZipFile(ROOT / "benchmark-baseline.zip") as archive:
+        with zipfile.ZipFile(BENCHMARK_DIR / "benchmark-baseline.zip") as archive:
             for name in ("compact-chat.py", "chat_memory.py"):
                 (baseline / name).write_bytes(archive.read(name))
         process = subprocess.Popen([
-            str(ROOT / "runner/llama-server.exe"), "-m", str(ROOT / "Qwen3-4B-Q4_K_M.gguf"),
+            str(RUNTIME_DIR / "runner/llama-server.exe"), "-m", str(RUNTIME_DIR / "Qwen3-4B-Q4_K_M.gguf"),
             "--alias", "qwen-coder", "--host", "127.0.0.1", "--port", str(args.port),
             "--device", "Vulkan0", "--gpu-layers", "28", "--ctx-size", "4096", "--parallel", "1",
             "--jinja", "--cache-type-k", "q8_0", "--cache-type-v", "q8_0", "--flash-attn", "on",
@@ -158,10 +160,14 @@ def main():
             else:
                 raise RuntimeError("Backend did not become ready.")
             variants = {}
-            for label, directory in (("baseline", baseline), ("optimised", ROOT)):
+            entries = {
+                "baseline": baseline / "compact-chat.py",
+                "optimised": PROJECT_ROOT / "server" / "compact_chat.py",
+            }
+            for label, entry in entries.items():
                 if args.variant and label != args.variant:
                     continue
-                module, server, usages = load(directory, label, temp / (label + ".sqlite3"), backend_url)
+                module, server, usages = load(entry, label, temp / (label + ".sqlite3"), backend_url)
                 servers.append(server)
                 variants[label] = (module, usages)
             results = {label: [] for label in variants}

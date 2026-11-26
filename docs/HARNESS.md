@@ -64,13 +64,13 @@ An 8,192-token launch was tested on the RX 570 with 28 layers offloaded and the 
 ## Tests and benchmark
 
 ```powershell
-python -E -B .\.local-ai\test_harness.py
-python -E -B .\.local-ai\benchmark_harness.py
+python -E -B .\tests\test_harness.py
+python -E -B .\benchmarks\benchmark_harness.py
 ```
 
-Stop an existing chat server before benchmarking to free VRAM. The benchmark starts one runner on port 18080 and compares the archived harness in `benchmark-baseline.zip` to the current code. Both use the same model, context, cache type, GPU split, reasoning cap and seed. Prompt caching is disabled for measurement. The baseline uses its default Think mode and the optimised chat uses its default Auto mode. This measures the complete change in defaults, including routing and archive work.
+Stop an existing chat server before benchmarking to free VRAM. The benchmark starts one runner on port 18080 and compares the archived harness in [benchmark-baseline.zip](../benchmarks/benchmark-baseline.zip) to the current server. Both use the same model, context, cache type, GPU split, reasoning cap and seed. Prompt caching is disabled for measurement. The baseline uses its default Think mode and the optimised chat uses its default Auto mode. This measures the complete change in defaults, including routing and archive work.
 
-The benchmark seeds two chats with older exact values and 18 irrelevant turns, then checks arithmetic, coding, multi-step reasoning and recall using task-specific answer patterns. Latency includes archival and compaction. This is a focused local smoke benchmark, with one sample per case. It does not measure broad coding accuracy, live web quality or long-running agent behaviour. See `benchmark-results.json` for individual results.
+The benchmark seeds two chats with older exact values and 18 irrelevant turns, then checks arithmetic, coding, multi-step reasoning and recall using task-specific answer patterns. Latency includes archival and compaction. This is a focused local smoke benchmark, with one sample per case. It does not measure broad coding accuracy, live web quality or long-running agent behaviour. See [benchmark-results.json](../benchmarks/benchmark-results.json) for individual results.
 
 | Measured on the RX 570 | Baseline | Optimised |
 | --- | ---: | ---: |
