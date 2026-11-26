@@ -1,6 +1,6 @@
 # Codex handoff
 
-**Update and compact this file after each substantive repository change.** Replace stale details with the current state and keep only information needed to resume work. Record decisions, changed entry points, meaningful verification, and unresolved work. Use the harness guide for durable detail and Git history for completed changes.
+**Update and compact this file after each substantive repository change.** Keep entry points, verification and unresolved work here. See the [harness guide](docs/HARNESS.md) for runtime details and [research notes](RESEARCH.md) for design rationale, evidence and future experiments.
 
 ## Project and runtime
 
@@ -11,12 +11,12 @@
 ## Where to continue
 
 - `server/llama_runtime.py` shares runner discovery, backend options and child cleanup between the chat and benchmark. The macOS/Linux default is 4K, with automatic Metal offload on Apple Silicon and CPU defaults for Intel Mac and Linux. The runner and model can be overridden with `LOCAL_AI_LLAMA_SERVER` and `LOCAL_AI_MODEL`.
-- `server/compact_chat.py` serves the loopback chat. `server/harness_context.py` budgets rendered-template tokens and routes Auto thinking. See [the harness guide](docs/HARNESS.md) for settings.
+- `server/compact_chat.py` serves the loopback chat. Thinking streams live, while the final answer is withheld until its token count and stop reason pass the reply-budget check. An oversized draft gets one shorter retry. `server/harness_context.py` budgets rendered prompts and routes Auto thinking.
 - `server/chat_memory.py` stores original turns, evidence references, task state, and review notes in chat-scoped SQLite FTS5. Routine turns archive without an extra inference.
-- `web/` contains the browser UI, sidebar, live thinking, metrics, and local Markdown and KaTeX rendering. `web/file-sharing.js` and `server/local_files.py` handle attachments and approval-based folder search. File turns suppress web search.
-- SearXNG research can run multiple bounded searches and carry forward evidence. The optional template in `.local-ai/searxng/` expects Docker or a separately supplied JSON-enabled instance. Provider behaviour was tested with a fixture. A live instance depends on local setup.
-- **Review answer** runs one explicitly requested reviewer pass on the same model. It starts with a 3,072-token working budget and can expand to the startup context. Notes are saved separately beside the draft. Changing GPU context allocation requires a server restart.
-- The `start-aider.cmd` and `start-aider.sh` launchers are optional clients for the native API. `start-chat.cmd coder` is the legacy Windows preset.
+- `web/` contains the browser UI, metrics, and Markdown and KaTeX rendering. Direct attachments stay available in the browser tab until removed. Selected excerpts go in the current user message, with token budgeting, so older missing-file replies do not take precedence. Folder grants are single-turn. File turns suppress web search.
+- The chat serves coding and general tasks. Web research is opt-in. Explicit references to the user's repository can offer the existing single-turn folder picker without a model call. The optional SearXNG template expects Docker or a JSON-enabled instance.
+- **Review answer** runs on the same model with a 3,072-token working budget that can expand to the startup context. The reviewer gets one shorter retry if the notes exceed the reply budget. Only validated notes are saved beside the draft. GPU context allocation changes require a restart.
+- `server/terminal_agent.py` runs a 4K-first coding session. Git searches Python declarations and the agent renders AST-qualified numbered excerpts. Unambiguous exact-definition questions without prior context can start with one excerpt and fall back to the normal path. Editing uses task-specific instructions, constrained ranges, syntax and test checks, and approval. SQLite stores workspace-scoped Q&A. Resume with `--session` or share the live session with `--browser`.
 
 ## Verification
 
@@ -25,4 +25,6 @@ python -E -B .\tests\test_harness.py
 python -E -B .\benchmarks\benchmark_harness.py
 ```
 
-Use the same scripts with `python3` on macOS and Linux. The benchmark fixes context at 4K and uses the frozen baseline. All 14 tests passed, including platform profiles and path rules. The POSIX launcher options passed a shell smoke test, and the 8K RX 570 profile passed live Windows inference and file sharing. Native macOS and Linux inference and shutdown still need verification.
+Use `python3` on macOS and Linux. All 33 tests passed. The 4K fixture checks cover exact citations, billing repair, additive test preservation, history and browser search. Native macOS/Linux runs remain unverified.
+
+The ignored `.local-ai/agent-tasks/` directory contains clean fixtures and scored reports. In `ADAPTIVE.md`, focused lookup passed 3/3 at 218 input tokens versus 1,100. The experimental short edit prompt passed 0/3 against 3/3 for the fuller prompt, which remains in production. Repeat across more tasks before widening the focused path.

@@ -2,6 +2,22 @@
 
 A local chat harness for Qwen3-4B and llama.cpp on Windows, macOS, and Linux. It adds token-budgeted context, SQLite recall and task state, approval-based file search, optional SearXNG research, and an on-demand reviewer pass.
 
+Ask coding questions and give general tasks in the same chat. Enable **Web research (SearXNG)** when you want online sources. Use the built-in terminal agent or the optional Aider client for workspace edits and tests.
+
+## Run the terminal agent
+
+From the AlexanderGPT checkout, start a session in the current Git workspace or pass `--workspace` with another project's path.
+
+```powershell
+python -X utf8 -E -B server/terminal_agent.py --browser --test python -E -B tests/test_harness.py
+```
+
+Use `python3` for both Python invocations on macOS and Linux. Omit `--browser` for a terminal-only session. Use `--connect` if the local llama.cpp runner is already running on port 8080. The agent defaults to a 4K context budget and starts one local model when it owns the runner.
+
+Type a general question or use `/search`, `/ask` and `/edit` to work with your repository. An edit shows a diff and an approval ID. Apply it with `/apply ID`, then run the configured command with `/test`. See the [agent workflow](docs/HARNESS.md#terminal-agent) for details.
+
+Try “Find the login handler in this codebase” to search the selected workspace directly. Use `/history` to inspect saved turns, or restart with the printed `--session` name and the same workspace to resume. The standalone chat keeps its own history.
+
 ## Run from a fresh checkout
 
 Install Python 3.10 or later with SQLite FTS5 and a compatible [llama.cpp build](https://github.com/ggml-org/llama.cpp/releases/tag/b12734). Download the [Qwen3-4B Q4_K_M GGUF](https://huggingface.co/Qwen/Qwen3-4B-GGUF/blob/main/Qwen3-4B-Q4_K_M.gguf) to `.local-ai/Qwen3-4B-Q4_K_M.gguf`. The same 2.5 GB model file works across platforms.
@@ -22,7 +38,7 @@ Open [the custom chat](http://127.0.0.1:8082) or [native llama.cpp chat](http://
 
 ## Verify your setup
 
-Run `python3 -E -B tests/test_harness.py` on macOS or Linux, or `python -E -B .\tests\test_harness.py` on Windows. The tests exercise runner selection and file-path rules for all three platforms. Live inference and file sharing have been verified on Windows. Native inference on macOS and Linux is pending hardware validation.
+Run `python3 -E -B tests/test_harness.py` on macOS or Linux, or `python -E -B .\tests\test_harness.py` on Windows. The regression suite covers platform profiles, workspace routing, history recall and edit approvals. Live Windows checks cover repository search, a follow-up answered from history, and a fix verified through the shared terminal and browser session. Native inference on macOS and Linux is pending hardware validation. See [RESEARCH.md](RESEARCH.md) for the design rationale, evidence and evaluation roadmap.
 
 ## Repository layout
 

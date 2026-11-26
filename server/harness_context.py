@@ -73,20 +73,25 @@ class Diagnostics:
         return result
 
 
-def build_context(count, system, prompt, sections, thinking, reserve, window=None):
+def build_context(count, system, prompt, sections, thinking, reserve, window=None, *, current_labels=()):
     """Greedily admit independent items by priority using the real rendered prompt."""
     ceiling = min(CONTEXT, window if window is not None else CONTEXT) - reserve - 32
     threshold = int(ceiling * PRESSURE)
 
     def messages(parts):
         history = [{"role": "system", "content": system}]
-        if parts:
-            context = "\n\n".join(f"{label}:\n{body}" for label, body in parts)
+        background = [f"{label}:\n{body}" for label, body in parts if label not in current_labels]
+        current = [f"{label}:\n{body}" for label, body in parts if label in current_labels]
+        if background:
             history += [
-                {"role": "user", "content": "Background data for the next request:\n\n" + context},
+                {"role": "user", "content": "Background data for the next request:\n\n" + "\n\n".join(background)},
                 {"role": "assistant", "content": "I will use it as background evidence."},
             ]
-        return history + [{"role": "user", "content": prompt}]
+        latest = (
+            "File excerpts attached to this request:\n\n" + "\n\n".join(current) + "\n\nUser request:\n" + prompt
+            if current else prompt
+        )
+        return history + [{"role": "user", "content": latest}]
 
     options = {"enable_thinking": thinking}
     admitted = []

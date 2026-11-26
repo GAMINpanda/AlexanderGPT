@@ -153,7 +153,7 @@
               <div>Text and source files up to 512 KiB. Qwen reads excerpts from larger files.</div>
             </details>
             <label>Mode <select id="mode"><option value="auto">Auto</option><option value="think">Think</option><option value="quick">Quick</option></select></label>
-            <label><input id="search" type="checkbox" checked> SearXNG research</label>
+            <label><input id="search" type="checkbox"> Web research (SearXNG)</label>
             <button id="retry" type="button" hidden>Retry compaction</button>
             <button type="submit" id="send">Send</button>
           </div>
@@ -557,6 +557,7 @@
         if (event.result) result = event.result;
         if (event.search_query) status.textContent = `Search ${event.search_count}: “${event.search_query}”…`;
         if (event.search_error) status.textContent = 'Research ended early. Generating with available evidence…';
+        if (event.reply_check) status.textContent = event.reply_check;
         if (event.reasoning_content) {
           const follow = nearBottom();
           status.textContent = 'Thinking…';
@@ -666,7 +667,6 @@
         status.textContent = 'Waiting for file search permission.';
         return;
       }
-      attachmentDrafts.delete(state.conversation);
       const turn = {...reply, prompt: text};
       reviewEvidence.set(turn, fileExcerpts);
       state.turns.push(turn);

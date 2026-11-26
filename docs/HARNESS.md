@@ -20,11 +20,13 @@ Archived turns, task snapshots and source references remain available after evic
 
 ## Storage and tools
 
+Coding questions, writing tasks, and general information use the same local chat and model. **Web research (SearXNG)** starts off each time the page loads. Enable it to allow online research independently of the Auto, Think and Quick settings. A request such as “Find the login handler in this codebase” can offer a folder picker without a model planning pass.
+
 `chat-memory.sqlite3` holds original user requests and final answers, per-turn metadata, source links with the excerpts supplied by SearXNG, and structured task state. Existing FTS entries remain readable. Entries created before this change lack the new metadata. SQLite FTS5 combines BM25 with importance and a small recency boost. The context assembler admits matching excerpts under the token budget. The browser's New chat button starts a separate conversation while earlier records remain on disk.
 
 Auto uses a cheap heuristic for obvious cases. An ambiguous request gives Qwen a short first pass in which it can request thinking, additional memory, or the source excerpts for a memory reference. The harness validates the request and limits additional passes. Task state updates use a schema for objectives, constraints, findings, decisions, completed work, outstanding work and references. Thinking traces appear in the browser transcript and stay out of the SQLite working memory.
 
-**Review answer** runs one optional reviewer pass on the same loaded model. It reads the original request, draft, related memory and saved source excerpts. File excerpts can also be passed from the original turn while it is open in the same browser tab. The reviewer starts with a 3,072-token working budget and can use the full configured window if the request and draft need it. The server's KV allocation stays fixed for the session. Review notes are saved beside the draft in SQLite, and reviewing again replaces the previous notes. A review is a second model pass, so its findings can repeat an original mistake.
+**Review answer** runs the reviewer on the same loaded model. It reads the original request, draft, related memory and saved source excerpts. File excerpts can also be passed from the original turn while it is open in the same browser tab. The reviewer starts with a 3,072-token working budget and can use the full configured window if the request and draft need it. The server's KV allocation stays fixed for the session. Notes are checked against the review-token limit before display and saving. If a draft exceeds the limit, the reviewer gets one shorter retry within its inference budget. A successful review replaces any previous notes beside that draft in SQLite.
 
 Search uses the configured SearXNG instance and can run follow-up queries. The harness retains short evidence and numbered links. It gives Qwen one chance to rephrase a duplicate query and can narrow a follow-up when a source explicitly identifies a missing fact. The loop also ends when it exhausts the request budget, hits a provider failure, or runs out of time. SearXNG snippets are evidence from the search provider. Stored source reads return those excerpts and links. The harness checks citation numbers, verifies simple integer arithmetic and parses fenced Python with the standard parser. It can attempt one syntax repair within the escalation budget. It does not execute generated code or take external actions on the model's behalf.
 
@@ -64,9 +66,35 @@ Set variables before launching. For example, use `$env:LOCAL_AI_DIAGNOSTICS = '1
 
 The browser shows final-call context, generation speed and reasoning tokens, plus aggregate request and compaction diagnostics. Reasoning tokens are estimated with the model tokenizer if the backend omits their breakdown. Token-count requests are reused within a turn. The optional diagnostic logs omit prompt text, replies, search queries and memory contents. Higher context, reply and reasoning settings need enough room to fit together.
 
+Thinking can stream live. The harness holds the final answer until it checks the text with the model's tokenizer and confirms generation finished within the reply limit. A draft that exceeds the cap gets one shorter retry if the inference budget permits it.
+
 An 8,192-token launch was tested on the RX 570 with 28 layers offloaded and the default quantised KV cache. It handled a 4,272-token prompt successfully and used a 459 MiB GPU KV buffer. Set `$env:LOCAL_AI_CONTEXT = '8192'` before starting the launcher to use that profile. Available VRAM depends on other applications, and the reply-token setting is independent of the context size.
 
 For optional Aider use, run `.\.local-ai\start-aider.cmd` on Windows with its local venv or `sh ./.local-ai/start-aider.sh` on macOS and Linux. The shell script uses the project venv if available, then an `aider` executable on PATH. Start the chat server first. The legacy `start-chat.cmd coder` preset is Windows-specific.
+
+## Terminal agent
+
+```powershell
+python -X utf8 -E -B server/terminal_agent.py --workspace C:\path\to\repo --browser --test python -m pytest
+```
+
+Use the test executable and arguments appropriate for that project. Put `--test` last. The agent runs the command directly from the selected workspace. With `--connect` it uses the runner already on port 8080 and caps the prompt budget at the lower of the requested and running context sizes. Add `--context 8192` to request 8K. `--prompt` runs one question or command and exits.
+
+- Plain questions use the existing harness. Terminal `/web` and the browser checkbox independently enable optional SearXNG research for those questions.
+- `/search discount_price` finds excerpts without inference. `/ask Where is discount_price called?` sends up to three line-numbered excerpts to Qwen. Plain repository lookups also search the selected workspace. Git searches across visible files for matching Python declarations. A second pass ranks text in up to 48 matching files. Selected Python definitions include a qualified name when they parse successfully.
+- A short question asking where one exact symbol is defined can start with one excerpt and a short prompt. The agent uses the full evidence path when the definition is ambiguous, the request asks for callers or wider context, or conversation history is available. If the small reply omits the expected location or reports insufficient evidence, the agent tries the full context.
+- For broad questions such as “Tell me about this codebase,” the agent supplies a bounded Git-visible file listing and an excerpt from the root README when available.
+- `/edit Fix discount_price in pricing.py to subtract the discount` asks Qwen for one replacement at numbered lines from the shown source. The response schema constrains the file and line choices. The agent validates the range and can retry a rejected proposal once. Python replacements are syntax-checked. On additive Python test requests it checks that original test functions are preserved and a new one exists. `/apply ID` writes the previewed edit after checking the original file bytes.
+- Edit prompts add test-preservation instructions and validation feedback when the request needs them. The file, line, syntax and approval checks still run independently of the prompt.
+- `/test` runs the configured command with a 60-second timeout and shows its exit code and output tail. If it fails after applying an edit, `/retry` can propose one correction using the failure output. Review and apply the new diff, then run the test again.
+- `--browser` prints a loopback URL. Both clients share the pending proposal and the browser displays the latest 20 command results, including terminal commands. Browser edits and tests require confirmation. Pending approvals end with `/quit` or Ctrl+C.
+- The agent saves original questions and answers, including file-backed turns, in local SQLite. It budgets recent turns and relevant older excerpts alongside current evidence. Use `/history` to inspect recent saved turns or restart with the printed `--session` name and the same workspace to resume. The standalone chat has its own history.
+
+The agent edits one existing UTF-8 file at a time. It prints model calls, input and generated tokens, total time and repository search time.
+
+On the Windows RX 570, the agent reused the running Qwen3-4B instance with a 4K agent budget. In a disposable Git workspace, it proposed an arithmetic fix in the terminal using one model call with 207 input tokens and 70 generated tokens. Search took 32 ms. The browser rejected an unapproved apply request, accepted the confirmed diff and ran the previously failing test successfully. In a separate cold 4K run, the agent found `login_handler` from a plain-language request in 47 ms of search and named the file again on the follow-up using saved history without rescanning. Larger repositories and native macOS/Linux runs still need live verification.
+
+The [research notes](../RESEARCH.md) explain the design choices and lay out experiments for repository indexing, history retrieval and verified coding tasks.
 
 ## Tests and benchmark
 
@@ -94,3 +122,5 @@ The benchmark seeds two chats with older exact values and 18 irrelevant turns, t
 | Generated tokens across calls | 2,944 | 1,721 |
 
 The simple arithmetic turn took 15.60 s before and 1.18 s after. The optimised multi-step reasoning turn still took 76.11 s, so measured savings are largest when Auto can answer directly and archive without an extra generation.
+
+A separate 4K run compared the harness immediately before and after the local-first routing and system prompt update. Both passed 6/6 with six generation calls. Input tokens rose from 1,216 to 1,342 and generated tokens from 1,358 to 1,386. Total time was 138.71 s before and 136.26 s after. The suite sends direct chat requests with web research off, so it measures ordinary chat and does not quantify the savings from skipping search. A regression test verifies that an explicit local repository request needs zero generation calls to offer folder access.

@@ -5,6 +5,7 @@
 !/AGENTS.md
 !/CODEX.md
 !/README.md
+!/RESEARCH.md
 !/.local-ai/
 !/server/
 !/web/
@@ -18,9 +19,11 @@
 !/server/harness_context.py
 !/server/local_files.py
 !/server/llama_runtime.py
+!/server/terminal_agent.py
 
 /web/*
 !/web/compact-chat.html
+!/web/terminal-agent.html
 !/web/file-sharing.js
 !/web/reply-markdown.js
 !/web/vendor/

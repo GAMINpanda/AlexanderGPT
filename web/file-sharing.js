@@ -1,6 +1,6 @@
 (() => {
   const maxFileBytes = 512 * 1024;
-  const generic = new Set('the and for file files find code where this that look search project repository implementation how please'.split(' '));
+  const generic = new Set('the and for in of to is it file files find code where this that look search project repo repository codebase workspace local our my implementation how please'.split(' '));
   const ignored = new Set(['.git', '.svn', 'node_modules', 'dist', 'build', 'bin', 'obj', '.venv', '__pycache__']);
 
   function keywords(text) {

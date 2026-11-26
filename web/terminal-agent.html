@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AlexanderGPT Agent</title>
+<style>
+  :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+  body { max-width: 60rem; margin: 2rem auto; padding: 0 1rem; }
+  h1 { margin-bottom: .25rem; }
+  #workspace { overflow-wrap: anywhere; margin-top: 0; }
+  article { border-top: 1px solid GrayText; padding: .75rem 0; }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: .5rem 0; }
+  textarea { box-sizing: border-box; display: block; width: 100%; margin: .4rem 0; font: inherit; }
+  button { padding: .3rem .6rem; margin-inline-end: .4rem; }
+  form { border-top: 1px solid GrayText; padding-top: 1rem; }
+  #status { min-height: 1.5em; }
+</style>
+<main>
+  <h1>AlexanderGPT Agent</h1>
+  <p id="workspace"></p>
+  <section id="history" aria-label="Session history"></section>
+  <form>
+    <label for="command">Question or command</label>
+    <textarea id="command" rows="3" maxlength="8000" required></textarea>
+    <button id="send">Send</button>
+    <button id="help" type="button">Commands</button>
+    <label><input id="web" type="checkbox"> Web research (SearXNG)</label>
+    <p id="status" role="status"></p>
+  </form>
+</main>
+<script>
+  const form = document.querySelector('form');
+  const command = document.querySelector('#command');
+  const history = document.querySelector('#history');
+  const status = document.querySelector('#status');
+  const workspace = document.querySelector('#workspace');
+  const send = document.querySelector('#send');
+  const help = document.querySelector('#help');
+  const web = document.querySelector('#web');
+  let displayed = '';
+  let busy = false;
+
+  async function refresh() {
+    const result = await fetch('/session', {cache: 'no-store'});
+    if (!result.ok) throw new Error('Could not load the local session.');
+    const state = await result.json();
+    workspace.textContent = state.workspace;
+    const snapshot = JSON.stringify(state.entries);
+    if (snapshot === displayed) return;
+    displayed = snapshot;
+    history.replaceChildren(...state.entries.map(entry => {
+      const turn = document.createElement('article');
+      const question = document.createElement('strong');
+      const output = document.createElement('pre');
+      question.textContent = entry.command;
+      output.textContent = entry.output;
+      turn.append(question, output);
+      return turn;
+    }));
+  }
+
+  async function submit(text) {
+    if (!text || busy) return;
+    const applying = /^\/apply(?:\s|$)/.test(text);
+    if (applying && !confirm('Apply the previewed diff to the workspace?')) return;
+    if (text === '/test' && !confirm('Run the test command configured at launch?')) return;
+    busy = send.disabled = help.disabled = true;
+    status.textContent = 'Working…';
+    try {
+      const result = await fetch('/session', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({command: text, web: web.checked, approve: applying || text === '/test'}),
+      });
+      const data = await result.json();
+      if (!result.ok) throw new Error(data.error);
+      if (command.value.trim() === text) command.value = '';
+      await refresh();
+      status.textContent = '';
+      form.scrollIntoView({block: 'end'});
+    } catch (error) {
+      status.textContent = error.message;
+    } finally {
+      busy = send.disabled = help.disabled = false;
+      command.focus();
+    }
+  }
+
+  form.addEventListener('submit', event => {
+    event.preventDefault();
+    submit(command.value.trim());
+  });
+  help.addEventListener('click', () => submit('/help'));
+  const poll = () => refresh().catch(() => {
+    if (!busy) status.textContent = 'Local session unavailable.';
+  });
+  poll();
+  setInterval(poll, 1500);
+</script>

@@ -1,5 +1,8 @@
 import io
+import json
 import pathlib
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -11,8 +14,244 @@ sys.path.insert(0, str(SERVER_DIR))
 import compact_chat as chat
 import harness_context as context
 import llama_runtime as runtime
+import terminal_agent as agent
 from chat_memory import ChatMemory
 from local_files import is_local_absolute, read_shared_file, validate_excerpts
+
+
+class TerminalAgentTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = pathlib.Path(temporary.name)
+        self.source = self.root / "pricing.py"
+        self.original = b"def discount_price(price, discount):\r\n    return price + discount\r\n"
+        self.source.write_bytes(self.original)
+        self.memory = ChatMemory(self.root / ".agent-test.sqlite3")
+        self.session = agent.Session(agent.Workspace(self.root), None, self.memory, "test")
+        self.hits = [({"name": self.source.name, "line": 1,
+                       "text": self.original.decode().replace("\r\n", "\n")}, self.original)]
+
+    def propose(self, name="pricing.py"):
+        reply = {"message": {"content": json.dumps({
+            "path": name, "start": 2, "end": 2, "new": "    return price - discount", "note": "Fix discount.",
+        })}}
+        with patch.object(chat, "count_prompt", return_value=20), patch.object(chat, "complete", return_value=(reply, {})):
+            return self.session.propose("Fix discount_price.", self.hits, "")
+
+    def test_edits_require_matching_approval_and_preserve_line_endings(self):
+        preview = self.propose()
+        self.assertIn("+    return price - discount", preview)
+        self.assertEqual(self.source.read_bytes(), self.original)
+        with self.assertRaisesRegex(ValueError, "approval ID"):
+            self.session.apply("wrong")
+        self.session.apply(self.session.pending.id)
+        self.assertEqual(self.source.read_bytes(), self.original.replace(b"+", b"-"))
+
+    def test_rejects_stale_source_and_model_paths_outside_excerpts(self):
+        with self.assertRaisesRegex(ValueError, "source shown"):
+            self.propose(name="../pricing.py")
+        self.propose()
+        self.source.write_bytes(self.original + b"# another edit\r\n")
+        with self.assertRaisesRegex(ValueError, "changed since preview"):
+            self.session.apply(self.session.pending.id)
+        self.assertTrue(self.source.read_bytes().endswith(b"# another edit\r\n"))
+        self.assertIsNone(self.session.pending)
+
+    @unittest.skipUnless(shutil.which("git"), "Git is required for workspace search")
+    def test_search_uses_git_ignores_and_finds_symbols_without_inference(self):
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        (self.root / ".gitignore").write_text("ignored.py\n", encoding="utf-8")
+        for name in ("ignored.py", ".env"):
+            (self.root / name).write_text("discount_price", encoding="utf-8")
+        with patch.object(chat, "complete") as complete:
+            result = self.session.run("/search discount_price")["output"]
+        complete.assert_not_called()
+        self.assertIn("pricing.py:1", result)
+        self.assertNotIn("ignored.py", result)
+        self.assertNotIn(".env", result)
+        (self.root / "README.md").write_text("Find the login handler in this codebase.", encoding="utf-8")
+        (self.root / "routes.py").write_text("def login_handler(): pass\n", encoding="utf-8")
+        hits = self.session.workspace.search("Find the login handler in this codebase", source_only=True)
+        self.assertEqual([excerpt["name"] for excerpt, _ in hits], ["routes.py"])
+
+    def test_retry_passes_test_failure_at_most_once(self):
+        self.propose()
+        self.session.apply(self.session.pending.id)
+        self.session.test_command = [sys.executable, "-c", "print('expected 40'); raise SystemExit(1)"]
+        self.assertIn("Test exit code 1", self.session.run("/test")["output"])
+        with patch.object(self.session.workspace, "search", return_value=self.hits), \
+             patch.object(self.session, "propose", return_value="Retry diff") as propose:
+            self.assertIn("Retry diff", self.session.run("/retry")["output"])
+            self.assertIn("one retry", self.session.run("/retry")["output"])
+        propose.assert_called_once_with("Fix discount_price.", self.hits, "expected 40\n")
+
+    def test_invalid_edit_retries_once_with_validation_feedback(self):
+        def draft(line):
+            return {"message": {"content": json.dumps({
+                "path": "pricing.py", "start": line, "end": line,
+                "new": "    return price - discount", "note": "Fix discount.",
+            })}}, {}
+
+        replies = [draft(20), draft(2)]
+        with patch.object(chat, "count_prompt", return_value=20), \
+             patch.object(chat, "complete", side_effect=replies) as complete:
+            self.session.propose("Fix the total.", self.hits, "")
+        self.assertEqual(complete.call_count, 2)
+        self.assertIn("Previous proposal rejected", complete.call_args.args[0][0]["content"])
+        properties = complete.call_args.kwargs["schema"]["properties"]
+        self.assertEqual(properties["path"]["enum"], ["pricing.py", ""])
+        self.assertEqual(properties["start"]["enum"], [1, 2])
+        self.assertEqual(self.source.read_bytes(), self.original)
+
+    def test_adding_python_test_cannot_replace_existing_test(self):
+        original = "def test_original():\n    assert True\n"
+        extra = "def test_extra():\n    assert 2 + 2 == 4\n"
+        hits = [({"name": "test_pricing.py", "line": 1, "text": original}, original.encode())]
+
+        def draft(first, last, new):
+            return {"message": {"content": json.dumps({
+                "path": "test_pricing.py", "start": first, "end": last, "new": new, "note": "Test the total.",
+            })}}, {}
+
+        with patch.object(chat, "count_prompt", return_value=20), \
+             patch.object(chat, "complete", side_effect=[draft(1, 2, extra), draft(1, 0, "\n" + extra)]) as complete:
+            preview = self.session.propose("Add a regression test.", hits, "")
+        self.assertIn("Preserve existing test functions", complete.call_args.args[0][0]["content"])
+        self.assertEqual(complete.call_args.kwargs["schema"]["properties"]["end"]["enum"], [0])
+        self.assertIn("+def test_extra()", preview)
+        self.assertNotIn("-def test_original()", preview)
+
+    def test_complete_python_function_is_aligned_to_its_shown_definition(self):
+        revised = self.original.decode().replace("\r\n", "\n").replace("price + discount", "price - discount")
+        reply = {"message": {"content": json.dumps({
+            "path": "pricing.py", "start": 2, "end": 2, "new": revised, "note": "Fix discount.",
+        })}}
+        with patch.object(chat, "count_prompt", return_value=20), \
+             patch.object(chat, "complete", return_value=(reply, {})) as complete:
+            self.session.propose("Fix pricing.py.", self.hits, "")
+        self.assertEqual(complete.call_count, 1)
+        self.assertEqual(self.session.pending.updated, self.original.replace(b"+", b"-"))
+
+    def test_failed_new_test_can_be_repaired_without_rewriting_original_tests(self):
+        name = "test_pricing.py"
+        initial = "def test_original():\n    assert True\n"
+        current = initial + "\ndef test_extra():\n    assert False\n"
+        hits = [({"name": name, "line": 1, "text": current}, current.encode())]
+        self.session.last_edit = agent.Edit("old", name, initial.encode(), current.encode(), "", "Add a test.")
+        reply = {"message": {"content": json.dumps({
+            "path": name, "start": 5, "end": 5, "new": "    assert 2 + 2 == 4", "note": "Repair the test.",
+        })}}
+        with patch.object(chat, "count_prompt", return_value=20), \
+             patch.object(chat, "complete", return_value=(reply, {})) as complete:
+            self.session.propose("Add a test.", hits, "The new test failed.")
+        self.assertIn(5, complete.call_args.kwargs["schema"]["properties"]["end"]["enum"])
+        self.assertTrue(self.session.pending.updated.decode().startswith(initial))
+        self.assertIn("assert 2 + 2 == 4", self.session.pending.updated.decode())
+
+    def test_edit_of_named_file_uses_only_that_file(self):
+        other = ({"name": "other.py", "line": 1, "text": "pass\n"}, b"pass\n")
+        draft = {"message": {"content": json.dumps({
+            "path": "pricing.py", "start": 2, "end": 2,
+            "new": "    return price - discount", "note": "Fix discount.",
+        })}}
+        with patch.object(chat, "count_prompt", return_value=20), \
+             patch.object(chat, "complete", return_value=(draft, {})) as complete:
+            self.session.propose("Fix pricing.py.", [other, *self.hits], "")
+        messages = complete.call_args.args[0]
+        self.assertNotIn("other.py", str(messages))
+        self.assertIn("2 |     return price + discount", str(messages))
+
+    @unittest.skipUnless(shutil.which("git"), "Git is required for workspace search")
+    def test_definition_search_gets_past_many_references(self):
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        references = self.root / "a_references"
+        references.mkdir()
+        for index in range(610):
+            (references / f"example{index}.py").write_text("unquote_plus('a+b')\n", encoding="utf-8")
+        (self.root / "z_definition.py").write_text(
+            "# Heading\nclass Decoder:\n    def unquote_plus(value):\n        return value.replace('+', ' ')\n",
+            encoding="utf-8",
+        )
+        hits = self.session.workspace.search("Where is unquote_plus defined?", source_only=True)
+        self.assertEqual(hits[0][0]["name"], "z_definition.py")
+        evidence = agent.numbered(hits[0][0])["text"]
+        self.assertIn("3 |     def unquote_plus", evidence)
+        self.assertIn("Python definition: Decoder.unquote_plus at line 3", evidence)
+
+    @unittest.skipUnless(shutil.which("git"), "Git is required for workspace search")
+    def test_base_lookup_omits_matching_override_when_base_is_visible(self):
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        (self.root / "callback.py").write_text(
+            "class Parser:\n    def handle_starttag(self): pass\n", encoding="utf-8",
+        )
+        (self.root / "derived.py").write_text(
+            "from callback import Parser\nclass Custom(Parser):\n    def handle_starttag(self): pass\n",
+            encoding="utf-8",
+        )
+        workspace = self.session.workspace
+        ordinary = workspace.search("Find handle_starttag", source_only=True)
+        base = workspace.search("Find the base handle_starttag definition", source_only=True)
+        self.assertIn("Custom.handle_starttag", [item.get("definition") for item, _ in ordinary])
+        self.assertEqual([item.get("definition") for item, _ in base], ["Parser.handle_starttag"])
+
+    def test_plain_repository_question_routes_to_source_and_remembers_answer(self):
+        with patch.object(self.session.workspace, "search", return_value=self.hits) as search, \
+             patch.object(chat, "select_answer", return_value={"answer": "In pricing.py:1."}) as answer:
+            prompt = "Find discount_price in this codebase"
+            self.assertIn("In pricing.py:1.", self.session.run(prompt)["output"])
+            search.assert_called_once_with(prompt, source_only=True)
+            self.assertEqual(answer.call_args.args[0]["files"], [agent.numbered(self.hits[0][0])])
+            self.session.run("What file did we just find?")
+            self.assertIn("In pricing.py:1.", answer.call_args.args[5][0])
+
+    def test_exact_definition_starts_small_and_can_fall_back(self):
+        exact = {**self.hits[0][0], "definition": "discount_price", "definition_line": 1}
+        other = {"name": "calls.py", "line": 1, "text": "from pricing import discount_price"}
+        hits = [(exact, self.original), (other, other["text"].encode())]
+        prompt = "Where is discount_price defined in this codebase?"
+        self.assertIsNone(agent.focused_source(prompt + " Include callers.", [exact, other]))
+        self.assertIsNone(agent.focused_source(prompt, [exact, {**exact, "name": "second.py"}]))
+        with patch.object(self.session.workspace, "search", return_value=hits), \
+             patch.object(chat, "select_answer", side_effect=[
+                 {"answer": "An answer without a citation."}, {"answer": "See pricing.py:1."},
+             ]) as answer:
+            self.assertIn("pricing.py:1", self.session.run(prompt)["output"])
+        first, second = [call.args[0]["files"] for call in answer.call_args_list]
+        self.assertEqual(len(first), 1)
+        self.assertIs(first[0]["focused"], chat.FOCUSED_FILE)
+        self.assertEqual(len(second), 2)
+
+    def test_edit_prompt_adds_test_and_repair_instructions_only_when_needed(self):
+        self.assertNotIn("Add a test by setting", agent.edit_instructions(False, False, ""))
+        self.assertIn("Add a test by setting", agent.edit_instructions(True, True, ""))
+        self.assertIn("Repair the newly added test", agent.edit_instructions(True, False, ""))
+        self.assertIn("Use a valid range", agent.edit_instructions(False, False, "Use a valid range"))
+
+    def test_saved_history_can_resume_and_recall_an_older_turn(self):
+        self.session.remember("Remember account-handler tag BLUEBIRD.", "Recorded BLUEBIRD.")
+        for index in range(5):
+            self.session.remember(f"Colour discussion {index}", "Green.")
+        resumed = agent.Session(agent.Workspace(self.root), None, self.memory, "test")
+        recent, recalled = resumed.history("What was the account-handler tag?")
+        self.assertNotIn("BLUEBIRD", "\n".join(recent))
+        self.assertIn("BLUEBIRD", "\n".join(recalled))
+        separate = agent.Session(agent.Workspace(self.root), None, self.memory, "another")
+        self.assertEqual(separate.history("account-handler"), ([], []))
+
+    @unittest.skipUnless(shutil.which("git"), "Git is required for workspace search")
+    def test_repository_overview_supplies_readme_and_file_listing(self):
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        (self.root / "README.md").write_text("# Pricing tools\nCalculates discounts.", encoding="utf-8")
+        (self.root / ".env").write_text("Hidden.", encoding="utf-8")
+        with patch.object(chat, "select_answer", return_value={"answer": "This project calculates discounts."}) as answer:
+            response = self.session.run("could you tell me about this codebase", web=True)
+            self.assertIn("This project calculates discounts.", response["output"])
+            files = answer.call_args.args[0]["files"]
+            self.assertIn("pricing.py", files[0]["text"])
+            self.assertNotIn(".env", files[0]["text"])
+            self.assertIn("Calculates discounts.", files[1]["text"])
+            self.assertEqual(answer.call_args.args[3]["queries"], [])
 
 
 class RuntimeTests(unittest.TestCase):
@@ -65,6 +304,21 @@ class RuntimeTests(unittest.TestCase):
         self.assertFalse(is_local_absolute("//server/main.py", windows=False))
 
 class ContextTests(unittest.TestCase):
+    def test_attachment_is_part_of_current_user_message(self):
+        def count(messages, options):
+            return sum(len(message["content"].split()) for message in messages)
+
+        messages, _, _, _ = context.build_context(
+            count, "System", "Summarise the file", [
+                ("Local file", "paper.txt\nActual evidence", True),
+                ("Recent turn", "I cannot see an attachment.", False),
+            ], False, 100, current_labels=("Local file",),
+        )
+        self.assertEqual(messages[-1]["role"], "user")
+        self.assertIn("Actual evidence", messages[-1]["content"])
+        self.assertTrue(messages[-1]["content"].endswith("Summarise the file"))
+        self.assertNotIn("cannot see", messages[-1]["content"])
+
     def test_priority_and_template_budget(self):
         def count(messages, options):
             return 7 + sum(len(entry["content"].split()) for entry in messages)
@@ -114,6 +368,7 @@ class ContextTests(unittest.TestCase):
         try:
             with patch.object(chat, "MEMORY", memory), patch.object(chat, "count_prompt", count), \
                  patch.object(chat, "complete", return_value=response) as infer, \
+                 patch.object(chat, "backend", return_value={"tokens": [1, 2, 3]}), \
                  patch.object(context, "REVIEW_TOKENS", 64), patch.object(context, "REVIEW_WINDOW", 160), \
                  patch.object(context, "CONTEXT", 512), patch.object(chat, "CONTEXT_SIZE", 512):
                 result = chat.review_answer({"conversation": conversation, "turn": turn})
@@ -121,6 +376,15 @@ class ContextTests(unittest.TestCase):
                 infer.assert_called_once()
                 with self.assertRaises(ValueError):
                     chat.review_answer({"conversation": str(uuid4()), "turn": turn})
+                infer.reset_mock()
+                infer.side_effect = [
+                    ({"message": {"content": "Cut off draft"}, "finish_reason": "length"}, {}),
+                    response,
+                ]
+                result = chat.review_answer({"conversation": conversation, "turn": turn})
+                self.assertEqual(result["text"], "Useful review.")
+                self.assertEqual(result["diagnostics"]["review_budget_retries"], 1)
+                self.assertEqual(infer.call_count, 2)
         finally:
             chat.DIAGNOSTICS.reset(token)
 
@@ -178,8 +442,16 @@ class ToolTests(unittest.TestCase):
         )) as complete:
             self.assertIsNone(chat.plan_file_search("Say hello"))
             complete.assert_not_called()
-            result = chat.plan_file_search("Find the login handler in my repository")
+            result = chat.plan_file_search("Find the login handler in the repository")
             self.assertEqual(result, {"query": "login", "reason": "I need the handler location."})
+            complete.assert_called_once()
+
+    def test_explicit_local_repository_offer_needs_no_inference(self):
+        prompt = "Find authenticate_user in this codebase"
+        with patch.object(chat, "complete") as complete:
+            result = chat.plan_file_search(prompt)
+        self.assertIn("authenticate_user", result["query"])
+        complete.assert_not_called()
 
     def test_search_discards_malformed_sources(self):
         response = io.BytesIO(
@@ -228,7 +500,7 @@ class ToolTests(unittest.TestCase):
             with patch.object(chat, "answer", side_effect=[
                 {"answer": "THINK", "limited": False},
                 {"answer": "A reasoned reply.", "limited": False},
-            ]) as answer:
+            ]) as answer, patch.object(chat, "backend", return_value={"tokens": [1, 2, 3]}):
                 result = chat.select_answer(
                     {"mode": "auto"}, "", "Why should I compare these approaches?",
                     {"evidence": []}, [], [], {}, None, None,
@@ -236,6 +508,35 @@ class ToolTests(unittest.TestCase):
             self.assertEqual(result["answer"], "A reasoned reply.")
             self.assertEqual(diagnostic.events["escalations"], 1)
             self.assertTrue(answer.call_args.args[2])
+        finally:
+            chat.DIAGNOSTICS.reset(token)
+
+    def test_final_reply_is_buffered_and_shortened_if_over_budget(self):
+        diagnostic = context.Diagnostics()
+        token = chat.DIAGNOSTICS.set(diagnostic)
+        events = []
+
+        def draft(*args, **kwargs):
+            if kwargs.get("concise"):
+                return {"answer": "Short answer.", "limited": False}
+            args[7]({"reasoning_content": "Think first."})
+            args[7]({"content": "Unapproved draft."})
+            return {"answer": "Unapproved draft.", "limited": False}
+
+        try:
+            with patch.object(chat, "answer", side_effect=draft) as infer, \
+                 patch.object(chat, "backend", side_effect=[
+                     {"tokens": range(context.REPLY + 1)}, {"tokens": [1, 2]},
+                 ]):
+                result = chat.select_answer(
+                    {"mode": "think"}, "", "Explain the topic", {"evidence": []},
+                    [], [], {}, None, events.append,
+                )
+            self.assertEqual(result["answer"], "Short answer.")
+            self.assertEqual(infer.call_count, 2)
+            self.assertEqual(events[0], {"reasoning_content": "Think first."})
+            self.assertTrue(all("content" not in event for event in events))
+            self.assertEqual(diagnostic.events["reply_budget_retries"], 1)
         finally:
             chat.DIAGNOSTICS.reset(token)
 
