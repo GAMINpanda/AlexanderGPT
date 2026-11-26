@@ -1,8 +1,20 @@
+import os
 import re
+import stat
 from pathlib import Path, PureWindowsPath
 
 
 MAX_FILE_BYTES = 512 * 1024
+
+
+def is_local_absolute(value, windows):
+    if not isinstance(value, str) or "\x00" in value:
+        return False
+    if windows:
+        return bool(re.fullmatch(r"[A-Za-z]:[\\/][^:]+", value)) and not any(
+            PureWindowsPath(part).is_reserved() for part in PureWindowsPath(value).parts[1:]
+        )
+    return value.startswith("/") and not value.startswith("//")
 
 
 def read_shared_file(value):
@@ -10,17 +22,21 @@ def read_shared_file(value):
         value = value.strip()
         if value.startswith('"') and value.endswith('"'):
             value = value[1:-1]
-    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z]:[\\/][^:\x00]+", value):
-        raise ValueError("Enter an absolute local file path, such as C:\\project\\main.py.")
-    if any(PureWindowsPath(part).is_reserved() for part in PureWindowsPath(value).parts[1:]):
-        raise ValueError("Choose a regular local file.")
+        if os.name != "nt" and value.startswith("~/"):
+            value = os.path.expanduser(value)
+    windows = os.name == "nt"
+    if not is_local_absolute(value, windows):
+        example = r"C:\project\main.py" if windows else "/path/to/project/main.py"
+        raise ValueError(f"Enter an absolute local file path, such as {example}.")
     try:
         path = Path(value).resolve(strict=True)
-        if not re.fullmatch(r"[A-Za-z]:[\\/][^:\x00]+", str(path)) or not path.is_file():
+        if not is_local_absolute(str(path), windows) or not path.is_file():
             raise ValueError("Choose a regular local file.")
-        with path.open("rb") as file:
+        with open(path, "rb", opener=lambda name, flags: os.open(name, flags | getattr(os, "O_NONBLOCK", 0))) as file:
+            if not stat.S_ISREG(os.fstat(file.fileno()).st_mode):
+                raise ValueError("Choose a regular local file.")
             data = file.read(MAX_FILE_BYTES + 1)
-    except OSError as error:
+    except (OSError, RuntimeError) as error:
         raise ValueError("Could not open that file. Check the path and permissions.") from error
     if len(data) > MAX_FILE_BYTES:
         raise ValueError("Choose a text file up to 512 KiB, or paste a relevant excerpt.")

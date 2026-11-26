@@ -19,6 +19,10 @@ from pathlib import Path
 BENCHMARK_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = BENCHMARK_DIR.parent
 RUNTIME_DIR = PROJECT_ROOT / ".local-ai"
+sys.path.insert(0, str(PROJECT_ROOT / "server"))
+from llama_runtime import process_options, runner_arguments, stop_runner
+
+
 CASES = [
     ("simple", "What is 14 * 6? Answer with the number only.", r"^84\.?$", False),
     ("irrelevant_history", "What port does our Glacier service use? Answer with the number only.", r"\b9467\b", True),
@@ -124,10 +128,17 @@ def validate_live(module):
 def main():
     os.environ["LOCAL_AI_CONTEXT"] = "4096"
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output", type=Path, default=BENCHMARK_DIR / "benchmark-results.json")
+    default_output = "benchmark-results.json" if os.name == "nt" else f"benchmark-results-{sys.platform}.json"
+    parser.add_argument("--output", type=Path, default=BENCHMARK_DIR / default_output)
     parser.add_argument("--port", type=int, default=18080)
     parser.add_argument("--variant", choices=("baseline", "optimised"))
     args = parser.parse_args()
+    try:
+        runner = runner_arguments(
+            RUNTIME_DIR, alias="qwen-coder", port=args.port, context=4096, thinking=640, cache_prompt=False,
+        )
+    except ValueError as error:
+        parser.error(str(error))
     backend_url = f"http://127.0.0.1:{args.port}"
     with tempfile.TemporaryDirectory() as temp, tempfile.TemporaryFile() as log:
         temp = Path(temp)
@@ -136,15 +147,10 @@ def main():
         with zipfile.ZipFile(BENCHMARK_DIR / "benchmark-baseline.zip") as archive:
             for name in ("compact-chat.py", "chat_memory.py"):
                 (baseline / name).write_bytes(archive.read(name))
-        process = subprocess.Popen([
-            str(RUNTIME_DIR / "runner/llama-server.exe"), "-m", str(RUNTIME_DIR / "Qwen3-4B-Q4_K_M.gguf"),
-            "--alias", "qwen-coder", "--host", "127.0.0.1", "--port", str(args.port),
-            "--device", "Vulkan0", "--gpu-layers", "28", "--ctx-size", "4096", "--parallel", "1",
-            "--jinja", "--cache-type-k", "q8_0", "--cache-type-v", "q8_0", "--flash-attn", "on",
-            "--batch-size", "256", "--ubatch-size", "128", "--reasoning-budget", "640",
-            "--no-context-shift", "--no-cache-prompt",
-        ], stdout=log, stderr=log, env={key: value for key, value in os.environ.items()
-                                      if not key.startswith("LLAMA_ARG_")})
+        process = subprocess.Popen(
+            runner, stdout=log, stderr=log, **process_options(),
+            env={key: value for key, value in os.environ.items() if not key.startswith("LLAMA_ARG_")},
+        )
         servers = []
         try:
             for _ in range(60):
@@ -192,9 +198,7 @@ def main():
             for server in servers:
                 server.shutdown()
                 server.server_close()
-            if process.poll() is None:
-                process.terminate()
-            process.wait()
+            stop_runner(process)
 
 
 if __name__ == "__main__":

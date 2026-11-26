@@ -1,10 +1,10 @@
 # Local inference harness
 
-Run `.\.local-ai\start-chat.cmd` from the workspace and open [local chat](http://127.0.0.1:8082). The launcher starts llama.cpp on port 8080 and the compacting browser chat on port 8082. The sidebar lists archived chats and opens each conversation with its own history and task memory. On smaller screens, use the **Chats** button. Press **Enter** to send and **Shift+Enter** to add a line. The llama.cpp API and the previous Qwen2.5 Coder launcher option are still available. The browser chat defaults to Auto, with Think and Quick available for direct control.
+Run `.\.local-ai\start-chat.cmd` on Windows or `sh ./.local-ai/start-chat.sh` on macOS and Linux, then open [local chat](http://127.0.0.1:8082). The launcher starts llama.cpp on port 8080 and the compacting browser chat on port 8082. The sidebar lists archived chats and opens each conversation with its own history and task memory. On smaller screens, use **Chats**. Press **Enter** to send and **Shift+Enter** to add a line. The browser chat defaults to Auto, with Think and Quick available for direct control.
 
 ## Model and context
 
-The model is Qwen3-4B Q4_K_M. The Windows llama.cpp build uses Vulkan on the RX 570. The launcher offloads 28 of 37 layers, with the remaining layers on CPU. The GGUF reports a 40,960-token training context. The launcher defaults to 8,192 tokens. Use `.\.local-ai\start-chat.cmd 4k` to fit a tighter VRAM budget or pass `8k` to select 8,192 explicitly. This model supports both thinking and non-thinking generation through its chat template.
+The model is Qwen3-4B Q4_K_M, with a 40,960-token training context and a hybrid thinking chat template. The Windows RX 570 profile uses Vulkan, offloads 28 of 37 layers, and defaults to 8,192 tokens. macOS and Linux default to 4,096 tokens and f16 KV. Apple Silicon uses automatic offload with the Metal build. Intel Macs and Linux default to CPU. Either launcher accepts `4k` or `8k`. Use [the README](../README.md) to select a runner for your OS and architecture.
 
 The original harness already supported SQLite FTS5 recall, an automatically rewritten rolling summary, streaming thinking, manual Think and Quick modes, and iterative SearXNG. It already used Flash Attention and an 8-bit KV cache. The changes below build on those paths in the same browser UI and launcher.
 
@@ -28,15 +28,20 @@ Auto uses a cheap heuristic for obvious cases. An ambiguous request gives Qwen a
 
 Search uses the configured SearXNG instance and can run follow-up queries. The harness retains short evidence and numbered links. It gives Qwen one chance to rephrase a duplicate query and can narrow a follow-up when a source explicitly identifies a missing fact. The loop also ends when it exhausts the request budget, hits a provider failure, or runs out of time. SearXNG snippets are evidence from the search provider. Stored source reads return those excerpts and links. The harness checks citation numbers, verifies simple integer arithmetic and parses fenced Python with the standard parser. It can attempt one syntax repair within the escalation budget. It does not execute generated code or take external actions on the model's behalf.
 
-Use **Attach file** to open a file picker or paste an absolute local Windows path. It accepts up to three UTF-8 or UTF-16 text files per message, at most 512 KiB each. The browser selects question-relevant chunks from large attachments, and the harness fits excerpts into the same token budget as the rest of the prompt. If Qwen proposes a file search, the chat shows the query and reason first. **Choose folder and allow once** gives the browser a folder to scan for that turn. **Continue without files** declines the request. The scan skips common dependency, build, and credential paths and reads up to 2,400 candidates or 24 MiB. Up to three matched excerpts go to the local model. The harness suspends web search during the file turn. Raw file contents are kept out of the SQLite archive, while any file details quoted in the answer are part of that saved answer.
+Use **Attach file** to open a file picker or paste an absolute local path. On macOS and Linux, paths starting with `~/` work too. It accepts up to three UTF-8 or UTF-16 text files per message, at most 512 KiB each. The browser selects question-relevant chunks from large attachments, and the harness fits excerpts into the same token budget as the rest of the prompt. If Qwen proposes a file search, the chat shows the query and reason first. **Choose folder and allow once** gives the browser a folder to scan for that turn. **Continue without files** declines the request. The scan skips common dependency, build, and credential paths and reads up to 2,400 candidates or 24 MiB. Up to three matched excerpts go to the local model. The harness suspends web search during the file turn. Raw file contents are kept out of the SQLite archive, while any file details quoted in the answer are part of that saved answer.
 
 ## Configuration
 
-Set variables in PowerShell before starting the launcher. For example, `$env:LOCAL_AI_DIAGNOSTICS = '1'` enables structured diagnostics. Restart the launcher to apply settings.
+Set variables before launching. For example, use `$env:LOCAL_AI_DIAGNOSTICS = '1'` in PowerShell or `export LOCAL_AI_DIAGNOSTICS=1` on macOS and Linux. Restart the launcher to apply settings.
 
 | Environment variable | Default | Purpose |
 | --- | ---: | --- |
-| `LOCAL_AI_CONTEXT` | 8192 | Context capacity passed to llama.cpp. Larger values can exceed available VRAM. |
+| `LOCAL_AI_CONTEXT` | Windows 8192, macOS/Linux 4096 | Context capacity passed to llama.cpp. Larger values can exceed available memory. |
+| `LOCAL_AI_LLAMA_SERVER` | Bundled runner, then PATH | Executable path or command name to use instead of automatic discovery. |
+| `LOCAL_AI_MODEL` | `.local-ai/Qwen3-4B-Q4_K_M.gguf` | Path to the local GGUF. |
+| `LOCAL_AI_PYTHON` | python3 | Python executable for the POSIX launcher. |
+| `LOCAL_AI_GPU_LAYERS` | Windows 28, Apple Silicon auto, Linux and Intel Mac 0 | GPU offload layers. Set `0` for CPU or `auto` for automatic offload with a compatible build. |
+| `LOCAL_AI_DEVICE` | Windows Vulkan0, automatic selection elsewhere | Optional device name from `llama-server --list-devices`. Empty uses the runner's device selection. |
 | `LOCAL_AI_REPLY_TOKENS` | 512 | Generation budget in Quick and final-answer reserve in Think. |
 | `LOCAL_AI_REVIEW_CONTEXT` | 3072 | Preferred working context for an optional reviewer pass. |
 | `LOCAL_AI_REVIEW_TOKENS` | 320 | Maximum tokens generated by one reviewer pass. |
@@ -49,8 +54,8 @@ Set variables in PowerShell before starting the launcher. For example, `$env:LOC
 | `LOCAL_AI_ADAPTIVE` | 1 | Enable Auto routing and model-requested escalation. |
 | `LOCAL_AI_RETRIEVE` | 1 | Enable automatic FTS excerpts and explicit memory/source tools. |
 | `LOCAL_AI_TASK_STATE` | 1 | Enable structured task-state updates. |
-| `LOCAL_AI_KV` | q8_0 | KV cache type used for keys and values. |
-| `LOCAL_AI_FLASH` | on | Flash Attention option passed to llama.cpp. |
+| `LOCAL_AI_KV` | Windows GPU q8_0, otherwise f16 | KV cache type used for keys and values. |
+| `LOCAL_AI_FLASH` | Windows GPU on, otherwise auto | Flash Attention option passed to llama.cpp. |
 | `LOCAL_AI_PROMPT_CACHE` | 1 | Reuse prompt prefixes where the runner supports reuse. |
 | `LOCAL_AI_CACHE_RAM_MIB` | 256 | Host RAM limit for retained prompt cache entries. |
 | `LOCAL_AI_DIAGNOSTICS` | 0 | Emit JSON records containing timing, counts and event types. |
@@ -61,6 +66,8 @@ The browser shows final-call context, generation speed and reasoning tokens, plu
 
 An 8,192-token launch was tested on the RX 570 with 28 layers offloaded and the default quantised KV cache. It handled a 4,272-token prompt successfully and used a 459 MiB GPU KV buffer. Set `$env:LOCAL_AI_CONTEXT = '8192'` before starting the launcher to use that profile. Available VRAM depends on other applications, and the reply-token setting is independent of the context size.
 
+For optional Aider use, run `.\.local-ai\start-aider.cmd` on Windows with its local venv or `sh ./.local-ai/start-aider.sh` on macOS and Linux. The shell script uses the project venv if available, then an `aider` executable on PATH. Start the chat server first. The legacy `start-chat.cmd coder` preset is Windows-specific.
+
 ## Tests and benchmark
 
 ```powershell
@@ -68,7 +75,12 @@ python -E -B .\tests\test_harness.py
 python -E -B .\benchmarks\benchmark_harness.py
 ```
 
-Stop an existing chat server before benchmarking to free VRAM. The benchmark starts one runner on port 18080 and compares the archived harness in [benchmark-baseline.zip](../benchmarks/benchmark-baseline.zip) to the current server. Both use the same model, context, cache type, GPU split, reasoning cap and seed. Prompt caching is disabled for measurement. The baseline uses its default Think mode and the optimised chat uses its default Auto mode. This measures the complete change in defaults, including routing and archive work.
+```sh
+python3 -E -B tests/test_harness.py
+python3 -E -B benchmarks/benchmark_harness.py
+```
+
+Stop an existing chat server before benchmarking to free memory. The benchmark starts one runner at 4K on port 18080 and compares [benchmark-baseline.zip](../benchmarks/benchmark-baseline.zip) to the current server. Both use the same model, context, cache type, GPU split, reasoning cap and seed. Prompt caching is disabled for measurement. The baseline uses Think and the optimised chat uses Auto. This measures the complete change in defaults, including routing and archive work. macOS and Linux write platform-specific results by default to preserve the committed Windows run.
 
 The benchmark seeds two chats with older exact values and 18 irrelevant turns, then checks arithmetic, coding, multi-step reasoning and recall using task-specific answer patterns. Latency includes archival and compaction. This is a focused local smoke benchmark, with one sample per case. It does not measure broad coding accuracy, live web quality or long-running agent behaviour. See [benchmark-results.json](../benchmarks/benchmark-results.json) for individual results.
 

@@ -10,8 +10,59 @@ sys.path.insert(0, str(SERVER_DIR))
 
 import compact_chat as chat
 import harness_context as context
+import llama_runtime as runtime
 from chat_memory import ChatMemory
-from local_files import read_shared_file, validate_excerpts
+from local_files import is_local_absolute, read_shared_file, validate_excerpts
+
+
+class RuntimeTests(unittest.TestCase):
+    def test_native_platform_defaults_and_linux_acceleration_override(self):
+        import os
+
+        profiles = [
+            ("win32", "AMD64", "28", "Vulkan0", "q8_0", "on"),
+            ("darwin", "arm64", "auto", None, "f16", "auto"),
+            ("darwin", "x86_64", "0", None, "f16", "auto"),
+            ("linux", "aarch64", "0", None, "f16", "auto"),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "Qwen3-4B-Q4_K_M.gguf").touch()
+            with patch.dict(os.environ, {}, clear=True), patch.object(runtime, "runner_location", return_value="runner"):
+                for system, architecture, layers, device, kv, flash in profiles:
+                    with self.subTest(platform=system, architecture=architecture), \
+                         patch.object(runtime.sys, "platform", system), \
+                         patch.object(runtime.platform, "machine", return_value=architecture):
+                        args = runtime.runner_arguments(root, alias="test", port=8080, context=8192, thinking=640)
+                        self.assertEqual(args[args.index("--gpu-layers") + 1], layers)
+                        self.assertEqual(args[args.index("--cache-type-v") + 1], kv)
+                        self.assertEqual(args[args.index("--flash-attn") + 1], flash)
+                        self.assertEqual(args[args.index("--host") + 1], "127.0.0.1")
+                        if device:
+                            self.assertEqual(args[args.index("--device") + 1], device)
+                        else:
+                            self.assertNotIn("--device", args)
+                with patch.object(runtime.sys, "platform", "linux"), \
+                     patch.dict(os.environ, {"LOCAL_AI_GPU_LAYERS": "auto", "LOCAL_AI_DEVICE": "Vulkan0"}):
+                    args = runtime.runner_arguments(root, alias="test", port=8080, context=4096,
+                                                    thinking=640, cache_prompt=False)
+                    self.assertIn("--device", args)
+                    self.assertEqual(args[args.index("--gpu-layers") + 1], "auto")
+                    self.assertIn("--no-cache-prompt", args)
+
+    def test_process_options_are_native(self):
+        with patch("llama_runtime.os.name", "posix"):
+            self.assertEqual(runtime.process_options(), {"start_new_session": True})
+        with patch("llama_runtime.os.name", "nt"), \
+             patch.object(runtime.subprocess, "CREATE_NEW_PROCESS_GROUP", 512, create=True):
+            self.assertEqual(runtime.process_options(), {"creationflags": 512})
+
+    def test_file_path_rules_cover_both_families(self):
+        self.assertTrue(is_local_absolute(r"C:\project\main.py", windows=True))
+        self.assertFalse(is_local_absolute(r"\\server\share\main.py", windows=True))
+        self.assertTrue(is_local_absolute("/home/example/main.py", windows=False))
+        self.assertFalse(is_local_absolute("project/main.py", windows=False))
+        self.assertFalse(is_local_absolute("//server/main.py", windows=False))
 
 class ContextTests(unittest.TestCase):
     def test_priority_and_template_budget(self):

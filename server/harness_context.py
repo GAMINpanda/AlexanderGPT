@@ -12,7 +12,7 @@ def integer(name, default, minimum, maximum):
     return value
 
 
-CONTEXT = integer("CONTEXT", 8192, 1024, 40960)
+CONTEXT = integer("CONTEXT", 8192 if os.name == "nt" else 4096, 1024, 40960)
 REPLY = integer("REPLY_TOKENS", 512, 64, 4096)
 REVIEW_WINDOW = integer("REVIEW_CONTEXT", 3072, 512, 40960)
 REVIEW_TOKENS = integer("REVIEW_TOKENS", 320, 64, 2048)
@@ -26,8 +26,6 @@ RETRIEVE = integer("RETRIEVE", 1, 0, 1)
 ADAPTIVE = integer("ADAPTIVE", 1, 0, 1)
 TASK_STATE = integer("TASK_STATE", 1, 0, 1)
 LOG = integer("DIAGNOSTICS", 0, 0, 1)
-KV = os.environ.get("LOCAL_AI_KV", "q8_0")
-FLASH = os.environ.get("LOCAL_AI_FLASH", "on")
 CACHE = integer("PROMPT_CACHE", 1, 0, 1)
 CACHE_RAM = integer("CACHE_RAM_MIB", 256, 0, 8192)
 

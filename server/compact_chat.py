@@ -3,8 +3,10 @@ import ast
 import operator
 import os
 import re
+import signal
 import sqlite3
 import subprocess
+import threading
 from contextvars import ContextVar
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -14,6 +16,7 @@ from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 from chat_memory import ChatMemory
+from llama_runtime import process_options, runner_arguments, stop_runner
 from local_files import read_shared_file, validate_excerpts
 import harness_context as limits
 
@@ -833,35 +836,46 @@ class ChatHandler(BaseHTTPRequestHandler):
 
 def main():
     global MEMORY
-    model = RUNTIME_DIR / "Qwen3-4B-Q4_K_M.gguf"
-    if not model.is_file():
-        raise SystemExit(f"Model file missing: {model.name}")
     if ANSWER_LIMIT + 32 >= CONTEXT_SIZE:
         raise SystemExit("Set a larger context or lower the combined reply and thinking budgets.")
-    MEMORY = ChatMemory(RUNTIME_DIR / "chat-memory.sqlite3")
+    try:
+        args = runner_arguments(
+            RUNTIME_DIR, alias=MODEL, port=8080, context=CONTEXT_SIZE,
+            thinking=limits.THINK, cache_ram=limits.CACHE_RAM,
+        )
+        MEMORY = ChatMemory(RUNTIME_DIR / "chat-memory.sqlite3")
+    except ValueError as error:
+        raise SystemExit(str(error)) from None
+    except sqlite3.OperationalError as error:
+        if "no such module: fts5" in str(error):
+            raise SystemExit("SQLite FTS5 is required. Use a Python build with FTS5 support.") from None
+        raise
     with ThreadingHTTPServer(("127.0.0.1", 8082), ChatHandler) as ui:
-        process = subprocess.Popen([
-            str(RUNTIME_DIR / "runner" / "llama-server.exe"), "--model", str(model),
-            "--alias", MODEL, "--host", "127.0.0.1", "--port", "8080",
-            "--cors-origins", "localhost", "--device", "Vulkan0", "--gpu-layers", "28",
-            "--ctx-size", str(CONTEXT_SIZE), "--parallel", "1", "--jinja",
-            "--cache-type-k", limits.KV, "--cache-type-v", limits.KV, "--flash-attn", limits.FLASH,
-            "--batch-size", "256", "--ubatch-size", "128",
-            "--cache-ram", str(limits.CACHE_RAM),
-            "--reasoning-budget", str(limits.THINK), "--no-context-shift",
-        ], creationflags=subprocess.CREATE_NEW_PROCESS_GROUP)
-        print(f"Open http://{UI_HOST} once the model loads. Press Ctrl+C to stop.", flush=True)
-        ui.timeout = 0.5
         try:
+            process = subprocess.Popen(args, **process_options())
+        except OSError as error:
+            raise SystemExit(f"Could not start llama-server: {error}") from None
+        previous_term = None
+
+        def stop_on_signal(_signum, _frame):
+            raise KeyboardInterrupt
+
+        try:
+            if os.name != "nt" and threading.current_thread() is threading.main_thread():
+                previous_term = signal.signal(signal.SIGTERM, stop_on_signal)
+            print(f"Open http://{UI_HOST} once the model loads. Press Ctrl+C to stop.", flush=True)
+            ui.timeout = 0.5
             while process.poll() is None:
                 ui.handle_request()
         except KeyboardInterrupt:
             return 0
         finally:
-            if process.poll() is None:
-                process.terminate()
-            process.wait()
-        return process.returncode if process.returncode > 0 else 0
+            try:
+                stop_runner(process)
+            finally:
+                if previous_term is not None:
+                    signal.signal(signal.SIGTERM, previous_term)
+        return process.returncode if process.returncode >= 0 else 128 - process.returncode
 
 
 if __name__ == "__main__":

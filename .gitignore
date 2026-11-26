@@ -1,5 +1,6 @@
 # Share the harness by allowlist. Local files stay private unless added deliberately.
 /*
+!/.gitattributes
 !/.gitignore
 !/AGENTS.md
 !/CODEX.md
@@ -16,6 +17,7 @@
 !/server/chat_memory.py
 !/server/harness_context.py
 !/server/local_files.py
+!/server/llama_runtime.py
 
 /web/*
 !/web/compact-chat.html
@@ -37,6 +39,8 @@
 /.local-ai/*
 !/.local-ai/start-aider.cmd
 !/.local-ai/start-chat.cmd
+!/.local-ai/start-aider.sh
+!/.local-ai/start-chat.sh
 !/.local-ai/searxng/
 
 /.local-ai/searxng/*
