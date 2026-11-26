@@ -70,6 +70,11 @@ def capture_functions(tree):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_")}
 
 
+def mutation_exposes_added_test(returncode, stderr, added_names):
+    failed = set(re.findall(r"(?m)^(test_\w+)\s+\([^)]*\)\s+\.\.\. (?:FAIL|ERROR)$", stderr))
+    return returncode != 0 and bool(set(added_names) & failed)
+
+
 def make_clone(destination):
     subprocess.run(["git", "clone", "--shared", "--quiet", str(SOURCE), str(destination)],
                    check=True, stdin=subprocess.DEVNULL, timeout=60)
@@ -87,6 +92,9 @@ def check_fixtures():
     files = agent.Workspace(SOURCE).names()
     if len(files) < 1700:
         raise SystemExit(f"Expected a large CPython workspace (at least 1,700 files); found {len(files)}.")
+    if not mutation_exposes_added_test(1, "test_new_name (pkg.Tests) ... FAIL", {"test_new_name"}) or \
+            mutation_exposes_added_test(1, "test_other_name (pkg.Tests) ... FAIL", {"test_new_name"}):
+        raise SystemExit("Mutation verification must detect failing added tests by their actual names.")
     for task in NAVIGATION:
         if task.get("path") and not agent.chat.references_workspace(task["prompt"]):
             raise SystemExit(f"Navigation prompt {task['name']} does not trigger workspace lookup.")
@@ -152,6 +160,7 @@ class Trial:
         result, metrics = self.original_complete(messages, **kwargs)
         self.calls.append({"input_tokens": metrics["prompt_tokens"],
                            "generated_tokens": metrics["generated_tokens"],
+                           "finish_reason": result.get("finish_reason"),
                            "prompt": [message.get("content", "") for message in messages],
                            "response": result.get("message", {}).get("content", "")})
         return result, metrics
@@ -325,7 +334,8 @@ def edit_trial(workspace, seed, output, task_name, prompt_variant="current"):
             try:
                 path.write_text(FILES["agent_bench_reservation.py"].replace("max(0, stock - held)", "stock - held"), encoding="utf-8")
                 mutated = subprocess.run(command, cwd=workspace.root, capture_output=True, text=True)
-                mutation_verified = mutated.returncode != 0 and "test_available_returns_zero" in mutated.stderr
+                mutation_verified = mutation_exposes_added_test(mutated.returncode, mutated.stderr,
+                                                                 set(updated) - set(original))
                 passed = passed and mutation_verified
             finally:
                 path.write_bytes(good)

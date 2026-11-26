@@ -160,6 +160,9 @@ class TerminalAgentTests(unittest.TestCase):
             self.session.propose("Fix the total.", self.hits, "")
         self.assertIn("syntax error at line", complete.call_args.args[0][0]["content"])
         self.assertIn("indentation", complete.call_args.args[0][0]["content"])
+        retry_prompt = "\n".join(message["content"] for message in complete.call_args.args[0])
+        self.assertIn("Rejected proposal", retry_prompt)
+        self.assertIn("broken", retry_prompt)
 
     def test_adding_python_test_cannot_replace_existing_test(self):
         original = "def test_original():\n    assert True\n"
@@ -183,9 +186,12 @@ class TerminalAgentTests(unittest.TestCase):
     def test_adding_test_keeps_retrieved_implementation_evidence(self):
         tests = "import unittest\nfrom inventory import available\n\nclass InventoryTests(unittest.TestCase):\n    def test_existing(self):\n        self.assertTrue(available(3, 1))\n"
         implementation = "def available(stock, held):\n    return max(0, stock - held)\n"
+        (self.root / "test_inventory.py").write_text(tests, encoding="utf-8")
+        (self.root / "inventory.py").write_text(implementation, encoding="utf-8")
+        noise = "def test_unrelated():\n    assert True\n"
         hits = [
             ({"name": "test_inventory.py", "line": 1, "text": tests}, tests.encode()),
-            ({"name": "inventory.py", "line": 1, "text": implementation}, implementation.encode()),
+            ({"name": "unrelated.py", "line": 1, "text": noise}, noise.encode()),
         ]
         reply = {"message": {"content": json.dumps({
             "path": "test_inventory.py", "start": 6, "end": 0,
@@ -198,6 +204,7 @@ class TerminalAgentTests(unittest.TestCase):
         prompt = "\n".join(message["content"] for message in complete.call_args.args[0])
         self.assertIn("def available(stock, held)", prompt)
         self.assertIn("test_inventory.py", prompt)
+        self.assertNotIn("unrelated.py", prompt)
 
     def test_additive_test_drops_an_exact_duplicate_of_an_existing_test(self):
         name = "test_inventory.py"

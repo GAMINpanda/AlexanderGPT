@@ -34,5 +34,11 @@ class LanguageProvider:
     def normalize_addition(self, source, replacement):
         return replacement
 
+    def related_imports(self, path, source):
+        return []
+
+    def symbol_excerpt(self, path, source, symbols):
+        return None
+
     def validate_edit(self, source, updated, *, test_task=False, baseline=None):
         return None

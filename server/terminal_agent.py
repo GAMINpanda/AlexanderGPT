@@ -155,7 +155,8 @@ def edit_instructions(test_task, adding_test, feedback):
     elif test_task:
         system += " Repair the newly added test from the failure output. Preserve the other tests."
     if feedback:
-        system += " Previous proposal rejected: " + feedback
+        system += " Previous proposal rejected: " + feedback + \
+            " Repair the rejected proposal in the supplied context with the smallest necessary change; do not start over."
     return system
 
 
@@ -372,6 +373,7 @@ class Session:
         self.lock = threading.Lock()
         self.pending = None
         self.last_edit = None
+        self.last_proposal = ""
         self.last_task = ""
         self.last_failure = ""
         self.retried = False
@@ -401,6 +403,30 @@ class Session:
             if len(source) <= 1500:
                 item = {"name": item["name"], "line": 1, "text": source}
             hits = [(item, raw)]
+        elif explicit and asks_to_add_test(task):
+            test_item, test_raw = explicit[0]
+            provider = language_for_path(test_item["name"])
+            if provider:
+                try:
+                    test_source = test_raw.decode("utf-8").replace("\r\n", "\n")
+                    related = []
+                    seen = {test_item["name"]}
+                    for candidates, symbols in provider.related_imports(test_item["name"], test_source):
+                        for path in candidates:
+                            if path in seen:
+                                continue
+                            try:
+                                raw, source = self.workspace.read(path)
+                            except (OSError, ValueError, RuntimeError):
+                                continue
+                            excerpt = provider.symbol_excerpt(path, source, symbols)
+                            if excerpt:
+                                related.append((excerpt, raw))
+                                seen.add(path)
+                                break
+                    hits = [(test_item, test_raw), *related]
+                except (UnicodeDecodeError, ValueError):
+                    pass
         try:
             return self.draft(task, hits, failure)
         except ProposalError as error:
@@ -409,14 +435,18 @@ class Session:
             diagnostic = chat.DIAGNOSTICS.get()
             if diagnostic:
                 diagnostic.event("proposal_retries")
-            return self.draft(task, hits, failure, str(error))
+            rejected = self.last_proposal
+            return self.draft(task, hits, failure, str(error), rejected)
 
-    def draft(self, task, hits, failure, feedback=""):
+    def draft(self, task, hits, failure, feedback="", rejected_proposal=""):
+        self.last_proposal = ""
         test_task = asks_to_add_test(task)
         adding_test = test_task and not failure
         sections = [("Source", f"{item['name']}\n{numbered(item)['text']}", True)
                     for item, _ in hits]
         sections.append(("Test output", failure, True))
+        if rejected_proposal:
+            sections.append(("Rejected proposal", rejected_proposal[:5000], True))
         recent, recalled = self.history(task)
         sections.extend(("Prior conversation", item, False) for item in [*recent, *recalled])
         system = edit_instructions(test_task, adding_test, feedback)
@@ -455,6 +485,7 @@ class Session:
             messages, thinking=False, limit=limits.REPLY,
             schema={**EDIT_SCHEMA, "properties": properties}, measured=size,
         )
+        self.last_proposal = choice.get("message", {}).get("content", "")[:5000]
         if choice.get("finish_reason") == "length":
             raise ProposalError("The edit exceeded the output budget. Return a smaller replacement.")
         try:

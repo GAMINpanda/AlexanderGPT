@@ -2,6 +2,7 @@
 
 import ast
 import re
+from pathlib import PurePosixPath
 from textwrap import dedent
 
 from .base import LanguageProvider, LanguageValidationError
@@ -42,6 +43,62 @@ class PythonLanguage(LanguageProvider):
             return find(ast.parse(source), (), ())
         except (SyntaxError, RecursionError, ValueError):
             return None
+
+    def related_imports(self, path, source):
+        """Return workspace-relative module candidates and imported symbol names."""
+        try:
+            tree = ast.parse(source)
+        except (SyntaxError, RecursionError, ValueError):
+            return []
+        parent = PurePosixPath(path).parent.parts
+        found = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                base = parent[:max(0, len(parent) - node.level + 1)] if node.level else ()
+                module = (*base, *(node.module.split(".") if node.module else ()))
+                symbols = tuple(alias.name for alias in node.names if alias.name != "*")
+                if not module:
+                    continue
+            elif isinstance(node, ast.Import):
+                module = ()
+                symbols = ()
+                for alias in node.names:
+                    parts = tuple(alias.name.split("."))
+                    found.append((("/".join(parts) + ".py", "/".join((*parts, "__init__.py"))), ()))
+                continue
+            else:
+                continue
+            dotted = "/".join(module)
+            candidates = (dotted + ".py", "/".join((*module, "__init__.py")))
+            found.append((candidates, symbols))
+        return found
+
+    def symbol_excerpt(self, path, source, symbols):
+        """Extract imported Python declarations without passing whole unrelated modules."""
+        try:
+            tree = ast.parse(source)
+        except (SyntaxError, RecursionError, ValueError):
+            return None
+        wanted = set(symbols)
+        kinds = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+        declarations = [node for node in ast.walk(tree)
+                        if isinstance(node, kinds) and (not wanted or node.name in wanted)]
+        if not declarations:
+            return None
+        declarations.sort(key=lambda node: (node.lineno, node.end_lineno))
+        lines = source.splitlines()
+        first_node = declarations[0]
+        first = min([first_node.lineno, *(decorator.lineno for decorator in first_node.decorator_list)])
+        last = declarations[-1].end_lineno
+        excerpt = "\n".join(lines[first - 1:last])
+        if len(excerpt) > 1500:
+            excerpt = "\n".join(lines[first - 1:first_node.end_lineno])
+        text = excerpt[:1500]
+        definition = self.qualify_definition(source, first_node.lineno)
+        item = {"name": path, "line": first, "text": text, "language": self.name}
+        if definition:
+            item.update(definition=definition["name"], definition_line=first_node.lineno)
+        return item
 
     def insertion_anchor(self, source, shown_start, shown_end):
         """Return the end of the last visible test as an unambiguous insertion point."""
