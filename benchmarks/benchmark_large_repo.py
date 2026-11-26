@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from textwrap import dedent
 from time import monotonic
 from urllib.request import urlopen
 from unittest.mock import patch
@@ -231,7 +232,41 @@ def test_command(*names):
     return [sys.executable, "-E", "-B", "-m", "unittest", "-v", *names]
 
 
-def edit_trial(workspace, seed, output, task_name):
+def compact_test_instructions(test_task, adding_test, feedback):
+    system = (
+        "Propose a small Python edit. Return path, start, end, new, note. In new, output only one complete, "
+        "syntactically valid test function with indentation and all delimiters closed. Add one distinct test; "
+        "do not copy or alter existing tests. Insert after the shown test anchor with end 0. Use implementation "
+        "excerpts to match the API. Preserve all existing tests."
+    )
+    if feedback:
+        system += " Previous proposal rejected: " + feedback
+    return system
+
+
+def proposal_attempts(calls, source):
+    provider = agent.language_for_path("test_agent_bench_reservation.py")
+    results = []
+    for call in calls:
+        try:
+            proposal = json.loads(call["response"])
+            replacement = proposal.get("new", "")
+            parseable = True
+        except (json.JSONDecodeError, AttributeError):
+            proposal, replacement, parseable = {}, "", False
+        try:
+            ast.parse(dedent(replacement))
+            syntax_valid = bool(replacement.strip())
+        except (SyntaxError, ValueError, RecursionError):
+            syntax_valid = False
+        duplicate_removed = bool(replacement and provider.normalize_addition(source, replacement) != replacement)
+        results.append({"json_valid": parseable, "path": proposal.get("path"),
+                        "syntax_valid": syntax_valid, "duplicate_normalized": duplicate_removed,
+                        "new": replacement})
+    return results
+
+
+def edit_trial(workspace, seed, output, task_name, prompt_variant="current"):
     prompt = EDIT_TASKS[task_name]
     trial = Trial(workspace, f"{seed}-edit-{task_name}", seed, output)
     test_module = {
@@ -240,6 +275,8 @@ def edit_trial(workspace, seed, output, task_name):
         "two_file": "test_agent_bench_settings",
     }[task_name]
     command = test_command(test_module)
+    if task_name == "add_test" and prompt_variant == "compact":
+        trial.stack.enter_context(patch.object(agent, "edit_instructions", compact_test_instructions))
     baseline = subprocess.run(command, cwd=workspace.root, capture_output=True, text=True)
     steps = [(prompt, None)]
     if task_name == "two_file":
@@ -269,20 +306,27 @@ def edit_trial(workspace, seed, output, task_name):
         if pending and pending.name in step_files(task_name):
             trial.client.apply(pending.id)
             suite = subprocess.run(command, cwd=workspace.root, capture_output=True, text=True)
-    passed = bool(proposals and all(row["valid"] for row in proposals) and suite.returncode == 0)
+    proposal_checks = proposal_attempts(trial.calls, FILES["test_agent_bench_reservation.py"]) \
+        if task_name == "add_test" else []
+    test_suite_passed = suite.returncode == 0
+    preservation_verified = None
+    mutation_verified = None
+    passed = bool(proposals and all(row["valid"] for row in proposals) and test_suite_passed)
     if task_name == "bugfix":
         passed = passed and (workspace.root / "agent_bench_inventory.py").read_text(encoding="utf-8").strip() != FILES["agent_bench_inventory.py"].strip()
     elif task_name == "add_test":
         original = capture_functions(ast.parse(FILES["test_agent_bench_reservation.py"]))
         updated = capture_functions(ast.parse((workspace.root / "test_agent_bench_reservation.py").read_text(encoding="utf-8")))
-        passed = passed and all(updated.get(name) == body for name, body in original.items()) and len(updated) == 2
+        preservation_verified = all(updated.get(name) == body for name, body in original.items()) and len(updated) == 2
+        passed = passed and preservation_verified
         if passed:
             path = workspace.root / "agent_bench_reservation.py"
             good = path.read_bytes()
             try:
                 path.write_text(FILES["agent_bench_reservation.py"].replace("max(0, stock - held)", "stock - held"), encoding="utf-8")
                 mutated = subprocess.run(command, cwd=workspace.root, capture_output=True, text=True)
-                passed = mutated.returncode != 0 and "test_available_returns_zero" in mutated.stderr
+                mutation_verified = mutated.returncode != 0 and "test_available_returns_zero" in mutated.stderr
+                passed = passed and mutation_verified
             finally:
                 path.write_bytes(good)
     elif task_name == "two_file":
@@ -294,6 +338,15 @@ def edit_trial(workspace, seed, output, task_name):
               "input_tokens": sum(c["input_tokens"] for c in trial.calls),
               "generated_tokens": sum(c["generated_tokens"] or 0 for c in trial.calls),
               "calls": trial.calls}
+    if task_name == "add_test":
+        result.update({"prompt_variant": prompt_variant, "proposal_attempts": proposal_checks,
+                       "first_proposal_syntax_valid": proposal_checks[0]["syntax_valid"] if proposal_checks else False,
+                       "duplicate_normalization_used": any(row["duplicate_normalized"] for row in proposal_checks),
+                       "retry_recovered": bool(len(proposal_checks) > 1 and proposal_checks[-1]["syntax_valid"]
+                                                and not proposal_checks[0]["syntax_valid"]
+                                                and proposals and proposals[-1]["valid"]),
+                       "test_suite_passed": test_suite_passed, "preservation_verified": preservation_verified,
+                       "mutation_verified": mutation_verified})
     trial.close()
     return result
 
@@ -310,7 +363,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--seed", action="append", type=int)
     navigation_names = [task["name"] for task in NAVIGATION]
-    parser.add_argument("--case", action="append", choices=["navigation", *navigation_names, "history", *EDIT_TASKS])
+    parser.add_argument("--case", action="append", choices=["navigation", *navigation_names, "history", *EDIT_TASKS,
+                                                              "add_test_prompt_comparison"])
     parser.add_argument("--output", type=Path, default=ROOT / ".local-ai" / "large-benchmark" / "results.json")
     parser.add_argument("--check-fixtures", action="store_true", help="Validate the pinned repository and tasks without model inference.")
     args = parser.parse_args()
@@ -347,6 +401,16 @@ def main():
                     result = edit_trial(workspace, seed, args.output, task)
                     row["edits"].append(result)
                     print(f"seed {seed} {task}: {'PASS' if result['passed'] else 'FAIL'} ({result['model_calls']} calls)", flush=True)
+            if "add_test_prompt_comparison" in cases:
+                row["prompt_comparison"] = []
+                variants = ["current", "compact"] if seed % 2 else ["compact", "current"]
+                for variant in variants:
+                    clone = Path(temporary) / f"repo-{seed}-{variant}"
+                    make_clone(clone)
+                    result = edit_trial(agent.Workspace(clone), seed, args.output, "add_test", variant)
+                    row["prompt_comparison"].append(result)
+                    print(f"seed {seed} prompt={variant}: {'PASS' if result['passed'] else 'FAIL'} "
+                          f"({result['model_calls']} calls, {result['input_tokens']} input tokens)", flush=True)
             report["runs"].append(row)
             save()
     report["summary"] = {
@@ -358,6 +422,42 @@ def main():
         "history_attempts": sum("history" in row for row in report["runs"]),
         "edits_passed": sum(item["passed"] for row in report["runs"] for item in row["edits"]),
         "edit_attempts": sum(len(row["edits"]) for row in report["runs"]),
+        "prompt_comparison": {
+            variant: {
+                "passed": sum(item["passed"] for row in report["runs"] for item in row.get("prompt_comparison", [])
+                               if item["prompt_variant"] == variant),
+                "attempts": sum(item["prompt_variant"] == variant for row in report["runs"]
+                                for item in row.get("prompt_comparison", [])),
+                "first_syntax_valid": sum(item["first_proposal_syntax_valid"] for row in report["runs"]
+                                           for item in row.get("prompt_comparison", [])
+                                           if item["prompt_variant"] == variant),
+                "duplicate_normalization": sum(item["duplicate_normalization_used"] for row in report["runs"]
+                                                for item in row.get("prompt_comparison", [])
+                                                if item["prompt_variant"] == variant),
+                "retry_recovered": sum(item["retry_recovered"] for row in report["runs"]
+                                       for item in row.get("prompt_comparison", [])
+                                       if item["prompt_variant"] == variant),
+                "test_suites_passed": sum(item["test_suite_passed"] for row in report["runs"]
+                                           for item in row.get("prompt_comparison", [])
+                                           if item["prompt_variant"] == variant),
+                "preservation_verified": sum(item["preservation_verified"] is True for row in report["runs"]
+                                               for item in row.get("prompt_comparison", [])
+                                               if item["prompt_variant"] == variant),
+                "mutation_verified": sum(item["mutation_verified"] is True for row in report["runs"]
+                                          for item in row.get("prompt_comparison", [])
+                                          if item["prompt_variant"] == variant),
+                "mean_input_tokens": round(sum(item["input_tokens"] for row in report["runs"]
+                                                for item in row.get("prompt_comparison", [])
+                                                if item["prompt_variant"] == variant) /
+                                            max(1, sum(item["prompt_variant"] == variant for row in report["runs"]
+                                                       for item in row.get("prompt_comparison", []))), 1),
+                "mean_seconds": round(sum(item["seconds"] for row in report["runs"]
+                                          for item in row.get("prompt_comparison", [])
+                                          if item["prompt_variant"] == variant) /
+                                      max(1, sum(item["prompt_variant"] == variant for row in report["runs"]
+                                                 for item in row.get("prompt_comparison", []))), 2),
+            } for variant in ("current", "compact")
+        },
     }
     save()
     print(f"Results saved to {args.output}", flush=True)
