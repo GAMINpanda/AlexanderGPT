@@ -81,7 +81,7 @@ python -X utf8 -E -B server/terminal_agent.py --workspace C:\path\to\repo --brow
 Use the test executable and arguments appropriate for that project. Put `--test` last. The agent runs the command directly from the selected workspace. With `--connect` it uses the runner already on port 8080 and caps the prompt budget at the lower of the requested and running context sizes. Add `--context 8192` to request 8K. `--prompt` runs one question or command and exits.
 
 - Plain questions use the existing harness. Terminal `/web` and the browser checkbox independently enable optional SearXNG research for those questions.
-- `/search discount_price` finds excerpts without inference. `/ask Where is discount_price called?` sends up to three line-numbered excerpts to Qwen. Plain repository lookups also search the selected workspace. Git searches across visible files for matching Python declarations. A second pass ranks text in up to 48 matching files. Selected Python definitions include a qualified name when they parse successfully.
+- `/search discount_price` finds excerpts without inference. `/ask Where is discount_price called?` sends up to three line-numbered excerpts to Qwen. Plain repository lookups also search the selected workspace. Language providers supply declaration patterns and qualified symbol details; the registered Python provider handles `.py` and `.pyi`. A second pass ranks text in up to 48 matching files. Providers may also add language-specific edit alignment, syntax checks, insertion anchors and test-preservation rules. Files without a provider retain generic line-based search and edits.
 - A short question asking where one exact symbol is defined can start with one excerpt and a short prompt. The agent uses the full evidence path when the definition is ambiguous, the request asks for callers or wider context, or conversation history is available. If the small reply omits the expected location or reports insufficient evidence, the agent tries the full context.
 - For broad questions such as “Tell me about this codebase,” the agent supplies a bounded Git-visible file listing and an excerpt from the root README when available.
 - `/edit Fix discount_price in pricing.py to subtract the discount` asks Qwen for one replacement at numbered lines from the shown source. The response schema constrains the file and line choices. The agent validates the range and can retry a rejected proposal once. Python replacements are syntax-checked, with the parser's line and error kind included in a syntax retry. For additive Python tests, the agent retains implementation excerpts even when the target test file is named, and anchors insertion after the last visible existing test. Validation checks that original test functions are preserved and a new one exists. `/apply ID` writes the previewed edit after checking the original file bytes.
@@ -112,6 +112,17 @@ Use `python3` on macOS or Linux. An active runner must already be at 4K. Use `--
 The four cases cover the billing control, a regional pricing change, a stock reservation boundary bug, and an additive regression test. They run against two synthetic repositories created in disposable directories. The verifier checks original tests and task-specific behaviour. For test generation it also checks that the new test catches a known broken implementation and that the original tests remain intact.
 
 The report distinguishes a valid first model proposal, a verified first proposal, and eventual success. It records model calls and tokens, elapsed time, proposed changes, test output, and the evidence sent to the model. By default, it writes `.local-ai/edit-benchmark/results.json` and a local runner log. These files are ignored by Git.
+
+### Large repository benchmark
+
+This benchmark uses the pinned, local CPython 3.10.8 standard-library snapshot (commit `6fc9bf58a755731706618355a1ec2cbb027ef428`) and adds three isolated task fixtures to a temporary clone. It covers an overview, three definition lookups, saved-history recall, a bug fix, regression-test addition, and a two-file change. It checks retrieval separately from answer citations, verifies edits with tests, mutates the implementation to ensure the new test catches the regression, and records calls, tokens, search time, and elapsed time. The source snapshot is not changed.
+
+```powershell
+python -X utf8 -E -B benchmarks/benchmark_large_repo.py --check-fixtures
+python -X utf8 -E -B benchmarks/benchmark_large_repo.py
+```
+
+The full run uses seeds 7, 19, and 42 at 4K. Use repeated `--case` or `--seed` arguments for a smaller run, such as `--case navigation --seed 7`. The CPython fixture must be installed by `.local-ai/agent-tasks/install.py` and remain clean at the pinned revision. Results and the runner log are written under the ignored `.local-ai/large-benchmark/` directory.
 
 ### Chat benchmark
 

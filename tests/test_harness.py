@@ -14,6 +14,7 @@ sys.path.insert(0, str(SERVER_DIR))
 import compact_chat as chat
 import harness_context as context
 import llama_runtime as runtime
+import languages
 import terminal_agent as agent
 from chat_memory import ChatMemory
 from local_files import is_local_absolute, read_shared_file, validate_excerpts
@@ -31,6 +32,23 @@ class TerminalAgentTests(unittest.TestCase):
         self.session = agent.Session(agent.Workspace(self.root), None, self.memory, "test")
         self.hits = [({"name": self.source.name, "line": 1,
                        "text": self.original.decode().replace("\r\n", "\n")}, self.original)]
+
+    def test_language_registry_selects_python_provider_and_leaves_unknown_files_generic(self):
+        self.assertIsInstance(languages.for_path("src/pricing.py"), languages.PythonLanguage)
+        self.assertIsInstance(languages.for_path("types.pyi"), languages.PythonLanguage)
+        self.assertIsNone(languages.for_path("src/app.js"))
+
+    def test_unregistered_language_keeps_generic_line_edit_path(self):
+        source = b"export const amount = 1;\n"
+        hits = [({"name": "app.js", "line": 1, "text": source.decode()}, source)]
+        reply = {"message": {"content": json.dumps({
+            "path": "app.js", "start": 1, "end": 1,
+            "new": "export const amount = 2;", "note": "Update amount.",
+        })}}
+        with patch.object(chat, "count_prompt", return_value=20), \
+             patch.object(chat, "complete", return_value=(reply, {})):
+            self.session.propose("Update app.js.", hits, "")
+        self.assertEqual(self.session.pending.updated, b"export const amount = 2;\n")
 
     def propose(self, name="pricing.py"):
         reply = {"message": {"content": json.dumps({

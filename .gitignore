@@ -20,6 +20,11 @@
 !/server/local_files.py
 !/server/llama_runtime.py
 !/server/terminal_agent.py
+!/server/languages/
+/server/languages/*
+!/server/languages/__init__.py
+!/server/languages/base.py
+!/server/languages/python.py
 
 /web/*
 !/web/compact-chat.html
@@ -36,6 +41,7 @@
 !/benchmarks/benchmark-results.json
 !/benchmarks/benchmark_harness.py
 !/benchmarks/benchmark_edits.py
+!/benchmarks/benchmark_large_repo.py
 
 /docs/*
 !/docs/HARNESS.md

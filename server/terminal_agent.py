@@ -1,7 +1,6 @@
 """Terminal and optional loopback clients for the local coding session."""
 
 import argparse
-import ast
 from dataclasses import dataclass
 from difflib import unified_diff
 from hashlib import sha256
@@ -16,7 +15,6 @@ import sqlite3
 import stat
 import subprocess
 import tempfile
-from textwrap import dedent
 import threading
 from time import monotonic, sleep
 from urllib.error import URLError
@@ -26,6 +24,8 @@ from uuid import uuid4
 import compact_chat as chat
 import harness_context as limits
 from chat_memory import ChatMemory
+from languages import for_path as language_for_path, providers as language_providers
+from languages.base import LanguageValidationError
 from llama_runtime import process_options, runner_arguments, stop_runner
 
 
@@ -33,7 +33,6 @@ MAX_SOURCE = 64 * 1024
 STOP_WORDS = set(("add are before bug change cite code codebase could defined definition does edit file find fix "
                   "for from give have how into just keep line local locate make method need new only our please "
                   "project repo repository should that the then this use what when where which with workspace would you").split())
-DEFINITION = re.compile(r"^\s*(?:async\s+)?(?:def|class)\s+([\w]+)\b")
 MAX_GIT_OUTPUT = 8 * 1024 * 1024
 EDIT_SCHEMA = {
     "type": "object",
@@ -74,7 +73,8 @@ def numbered(item):
     lines = item["text"].splitlines()
     text = "\n".join(f"{line} | {text}" for line, text in enumerate(lines, item["line"]))
     if item.get("definition"):
-        text = f"Python definition: {item['definition']} at line {item['definition_line']}\n{text}"
+        language = item.get("language", "Source")
+        text = f"{language} definition: {item['definition']} at line {item['definition_line']}\n{text}"
     return {**item, "numbered": True, "text": text}
 
 
@@ -125,29 +125,6 @@ def asks_to_add_test(task):
         r"(?:(?:a|an|one|new|unit|regression|additional|integration|some|the)\s+)*tests?\b",
         task, re.I,
     ))
-
-
-def python_definition(source, line):
-    def find(node, parents, bases):
-        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
-            if not node.lineno <= line <= node.end_lineno:
-                return None
-            parents = (*parents, node.name)
-            if isinstance(node, ast.ClassDef):
-                bases = tuple(base.id if isinstance(base, ast.Name) else base.attr
-                              for base in node.bases if isinstance(base, (ast.Name, ast.Attribute)))
-            if node.lineno == line:
-                return ".".join(parents), bases
-        for child in ast.iter_child_nodes(node):
-            found = find(child, parents, bases)
-            if found:
-                return found
-        return None
-
-    try:
-        return find(ast.parse(source), (), ())
-    except (SyntaxError, RecursionError, ValueError):
-        return None
 
 
 class Workspace:
@@ -249,28 +226,30 @@ class Workspace:
         if terms:
             pattern = "|".join(term.replace("-", "[-]") for term in sorted(terms | aliases))
             grep = ["grep", "-z", "-n", "-I", "-i", "-E", "--no-textconv", "--untracked"]
-            signature = (r"^[[:space:]]*(async[[:space:]]+)?(def|class)[[:space:]]+"
-                         rf"[[:alnum:]_]*({pattern})[[:alnum:]_]*")
-            output = self.git([*grep, "-e", signature, "--", "*.py", "*.pyi"], missing_ok=True)
             definitions = []
-            for record in output.decode("utf-8", errors="replace").split("\n"):
-                fields = record.split("\0", 2)
-                if len(fields) != 3 or fields[0] not in paths or not fields[1].isdigit():
+            for provider in language_providers():
+                signature = provider.declaration_pattern(pattern)
+                if not signature or not provider.search_globs:
                     continue
-                name, number, text = fields
-                tokens = source_terms(text)
-                overlap = terms & tokens
-                definition = DEFINITION.match(text) if name.endswith((".py", ".pyi")) else None
-                symbol = source_terms(definition[1]) if definition else set()
-                score = 3 * len(overlap) + 4 * len(symbol & (terms | aliases)) + 8 * len(symbol & aliases)
-                score += 16 * len(symbol & exact) + 6 * len(overlap & exact)
-                if not score:
-                    continue
-                rank = score + paths[name]
-                if symbol & (terms | aliases):
-                    definitions.append((rank, name, int(number)))
-                if rank > best.get(name, (0, 0))[0]:
-                    best[name] = (rank, int(number))
+                output = self.git([*grep, "-e", signature, "--", *provider.search_globs], missing_ok=True)
+                for record in output.decode("utf-8", errors="replace").split("\n"):
+                    fields = record.split("\0", 2)
+                    if len(fields) != 3 or fields[0] not in paths or not fields[1].isdigit():
+                        continue
+                    name, number, text = fields
+                    tokens = source_terms(text)
+                    overlap = terms & tokens
+                    symbol_name = provider.declaration_name(text)
+                    symbol = source_terms(symbol_name) if symbol_name else set()
+                    score = 3 * len(overlap) + 4 * len(symbol & (terms | aliases)) + 8 * len(symbol & aliases)
+                    score += 16 * len(symbol & exact) + 6 * len(overlap & exact)
+                    if not score:
+                        continue
+                    rank = score + paths[name]
+                    if symbol & (terms | aliases):
+                        definitions.append((rank, name, int(number)))
+                    if rank > best.get(name, (0, 0))[0]:
+                        best[name] = (rank, int(number))
             sources = {}
             for rank, name, line in sorted(definitions, key=lambda entry: -entry[0])[:24]:
                 if name not in sources:
@@ -313,11 +292,13 @@ class Workspace:
             body = (prefix + "".join(lines[line - 1:line + 13]))[:1500]
             if body.strip():
                 excerpt = {"name": name, "line": start + 1, "text": body}
-                if name.endswith((".py", ".pyi")) and line <= len(lines) and DEFINITION.match(lines[line - 1]):
-                    definition = python_definition(source, line)
-                    if definition:
-                        name_at_line, bases = definition
-                        excerpt.update(definition=name_at_line, definition_line=line, bases=bases)
+                provider = language_for_path(name)
+                declaration = provider.declaration_name(lines[line - 1]) if provider and line <= len(lines) else None
+                if declaration:
+                    details = provider.qualify_definition(source, line)
+                    if details:
+                        excerpt.update(definition=details["name"], definition_line=line,
+                                       bases=details.get("bases", ()), language=provider.name)
                 matches.append((excerpt, raw))
                 if len(matches) == 3:
                     break
@@ -342,55 +323,6 @@ class Edit:
 
 class ProposalError(ValueError):
     pass
-
-
-def test_functions(tree, prefix=""):
-    found = {}
-    for node in tree.body:
-        if isinstance(node, ast.ClassDef):
-            found.update(test_functions(node, prefix + node.name + "."))
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
-            name = prefix + node.name
-            found.setdefault(name, []).append(ast.dump(node))
-    return found
-
-
-def test_insertion_anchor(source, shown_start, shown_end):
-    """Return the end of the last visible test as an unambiguous insertion point."""
-    try:
-        tree = ast.parse(source)
-    except (SyntaxError, RecursionError, ValueError):
-        return None
-    tests = [node for node in ast.walk(tree)
-             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-             and node.name.startswith("test_")
-             and shown_start <= node.end_lineno <= shown_end]
-    return max((node.end_lineno for node in tests), default=None)
-
-
-def align_python_edit(source, replacement, first, last, shown_start, shown_end, adding_test):
-    """Keep complete function drafts and additive tests at function boundaries."""
-    functions = (ast.FunctionDef, ast.AsyncFunctionDef)
-    try:
-        body = ast.parse(dedent(replacement)).body
-        tree = ast.parse(source)
-    except (SyntaxError, RecursionError, ValueError):
-        return first, last
-    if len(body) != 1 or not isinstance(body[0], functions):
-        return first, last
-    function = body[0]
-    line = replacement.splitlines()[function.lineno - 1]
-    indentation = len(line) - len(line.lstrip())
-    for node in ast.walk(tree):
-        if not isinstance(node, functions) or node.col_offset != indentation:
-            continue
-        if not shown_start <= node.lineno <= first <= node.end_lineno <= shown_end:
-            continue
-        if adding_test and last == 0 and function.name.startswith("test_"):
-            return node.end_lineno, 0
-        if node.name == function.name and first <= last <= node.end_lineno and not node.decorator_list:
-            return node.lineno, node.end_lineno
-    return first, last
 
 
 class Session:
@@ -471,7 +403,8 @@ class Session:
         anchors = {}
         if adding_test:
             for name, (_, source, _, start, end) in shown.items():
-                anchor = test_insertion_anchor(source, start, end)
+                provider = language_for_path(name)
+                anchor = provider.insertion_anchor(source, start, end) if provider else None
                 if anchor is not None:
                     anchors[name] = anchor
         properties = {**EDIT_SCHEMA["properties"],
@@ -504,8 +437,9 @@ class Session:
             raise ProposalError(f"Use a valid range within lines {start} through {end}, or end 0 to insert.")
         if "\r" in new or "\0" in new:
             raise ProposalError("Only LF line breaks are allowed in the replacement.")
-        if name.endswith(".py"):
-            first, last = align_python_edit(source, new, first, last, start, end, adding_test)
+        provider = language_for_path(name)
+        if provider:
+            first, last = provider.align_edit(source, new, first, last, start, end, adding_test)
         left, right = (first - 1, last) if last else (first, first)
         prefix, suffix = "".join(lines[:left]), "".join(lines[right:])
         if new and (suffix or source.endswith("\n")) and not new.endswith("\n"):
@@ -515,25 +449,14 @@ class Session:
         updated = prefix + new + suffix
         if updated == source:
             raise ProposalError("The replacement does not change the file.")
-        if name.endswith(".py"):
+        if provider:
+            previous = self.last_edit
+            baseline = (previous.original.decode("utf-8") if failure and previous and previous.name == name else source)
             try:
-                tree = ast.parse(updated)
-            except SyntaxError as error:
-                location = f"line {error.lineno}" if error.lineno else "an unknown line"
-                detail = error.msg or "invalid syntax"
-                raise ProposalError(
-                    f"Python syntax error at {location}: {detail}. Correct the indentation or syntax in the proposed edit."
-                ) from None
-            if test_task:
-                try:
-                    previous = self.last_edit
-                    baseline = previous.original.decode("utf-8") if failure and previous and previous.name == name else source
-                    before = test_functions(ast.parse(baseline))
-                except SyntaxError:
-                    raise ValueError("Existing tests cannot be checked because the original Python file has a syntax error.") from None
-                after = test_functions(tree)
-                if any(after.get(key) != bodies for key, bodies in before.items()) or not (after.keys() - before.keys()):
-                    raise ProposalError("Preserve existing test functions exactly and append a new test with a distinct name.")
+                provider.validate_edit(source, updated, test_task=test_task,
+                                      baseline=baseline if test_task else None)
+            except LanguageValidationError as error:
+                raise ProposalError(str(error)) from None
         has_crlf = b"\r\n" in original
         if b"\r" in original.replace(b"\r\n", b"") or (has_crlf and b"\n" in original.replace(b"\r\n", b"")):
             raise ValueError("This file uses mixed or unsupported line endings.")

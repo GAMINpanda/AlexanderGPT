@@ -175,8 +175,11 @@ def verify(root, case, fixture):
     if changed != {case.target}:
         return {"passed": False, "reason": "Unexpected changed files", "files": sorted(changed)}
     if case.tests:
-        previous = agent.test_functions(ast.parse(fixture[case.target]))
-        current = agent.test_functions(ast.parse((root / case.target).read_text(encoding="utf-8")))
+        provider = agent.language_for_path(case.target)
+        if provider is None:
+            return {"passed": False, "reason": "No language provider for structural test checks"}
+        previous = provider.test_functions(ast.parse(fixture[case.target]))
+        current = provider.test_functions(ast.parse((root / case.target).read_text(encoding="utf-8")))
         if any(current.get(name) != body for name, body in previous.items()) or len(current) != case.tests:
             return {"passed": False, "reason": "Existing tests changed or required test missing"}
     suite = python(root, "-m", "unittest", "-v")
