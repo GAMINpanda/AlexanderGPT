@@ -108,12 +108,23 @@ def edit_instructions(test_task, adding_test, feedback):
         "Use empty path and explain in note if the available source is insufficient."
     )
     if adding_test:
-        system += " Add a test by setting end to 0. In new, include only the new test with its indentation."
+        system += (" Add only the new test. Insert it after the last existing test using end 0; "
+                   "the harness supplies that test's exact ending line as the insertion anchor. "
+                   "Use the implementation excerpts to confirm the function's arguments and behavior. "
+                   "Keep the existing tests unchanged.")
     elif test_task:
         system += " Repair the newly added test from the failure output. Preserve the other tests."
     if feedback:
         system += " Previous proposal rejected: " + feedback
     return system
+
+
+def asks_to_add_test(task):
+    return bool(re.search(
+        r"\b(?:add|write|create|append|include)\s+"
+        r"(?:(?:a|an|one|new|unit|regression|additional|integration|some|the)\s+)*tests?\b",
+        task, re.I,
+    ))
 
 
 def python_definition(source, line):
@@ -344,6 +355,19 @@ def test_functions(tree, prefix=""):
     return found
 
 
+def test_insertion_anchor(source, shown_start, shown_end):
+    """Return the end of the last visible test as an unambiguous insertion point."""
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, RecursionError, ValueError):
+        return None
+    tests = [node for node in ast.walk(tree)
+             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+             and node.name.startswith("test_")
+             and shown_start <= node.end_lineno <= shown_end]
+    return max((node.end_lineno for node in tests), default=None)
+
+
 def align_python_edit(source, replacement, first, last, shown_start, shown_end, adding_test):
     """Keep complete function drafts and additive tests at function boundaries."""
     functions = (ast.FunctionDef, ast.AsyncFunctionDef)
@@ -399,7 +423,7 @@ class Session:
         requested = set(re.findall(r"[\w./-]+\.[\w-]+", task.casefold()))
         explicit = [(item, raw) for item, raw in hits
                     if requested & {item["name"].casefold(), Path(item["name"]).name.casefold()}]
-        if len(explicit) == 1:
+        if len(explicit) == 1 and not asks_to_add_test(task):
             item, raw = explicit[0]
             source = raw.decode("utf-8").replace("\r\n", "\n")
             if len(source) <= 1500:
@@ -416,11 +440,7 @@ class Session:
             return self.draft(task, hits, failure, str(error))
 
     def draft(self, task, hits, failure, feedback=""):
-        test_task = re.search(
-            r"\b(?:add|write|create|append|include)\s+"
-            r"(?:(?:a|an|one|new|unit|regression|additional|integration|some|the)\s+)*tests?\b",
-            task, re.I,
-        )
+        test_task = asks_to_add_test(task)
         adding_test = test_task and not failure
         sections = [("Source", f"{item['name']}\n{numbered(item)['text']}", True)
                     for item, _ in hits]
@@ -448,9 +468,15 @@ class Session:
         if not shown:
             raise ValueError("No complete source lines fit. Use a shorter task.")
         line_numbers = sorted({number for _, _, _, start, end in shown.values() for number in range(start, end + 1)})
+        anchors = {}
+        if adding_test:
+            for name, (_, source, _, start, end) in shown.items():
+                anchor = test_insertion_anchor(source, start, end)
+                if anchor is not None:
+                    anchors[name] = anchor
         properties = {**EDIT_SCHEMA["properties"],
                       "path": {"enum": [*shown, ""]},
-                      "start": {"enum": line_numbers},
+                      "start": {"enum": sorted(set(anchors.values())) if anchors else line_numbers},
                       "end": {"enum": [0] if adding_test else [0, *line_numbers]}}
         choice, _ = chat.complete(
             messages, thinking=False, limit=limits.REPLY,
@@ -472,6 +498,8 @@ class Session:
         original, source, lines, start, end = shown[name]
         if adding_test and last != 0:
             raise ProposalError("Preserve existing test functions. Use end 0 to insert only the new test.")
+        if adding_test and name in anchors and first != anchors[name]:
+            raise ProposalError(f"Insert after the last existing test at line {anchors[name]} and use end 0.")
         if not (start <= first <= last <= end or last == 0 and start <= first <= end):
             raise ProposalError(f"Use a valid range within lines {start} through {end}, or end 0 to insert.")
         if "\r" in new or "\0" in new:
@@ -490,8 +518,12 @@ class Session:
         if name.endswith(".py"):
             try:
                 tree = ast.parse(updated)
-            except SyntaxError:
-                raise ProposalError("The proposed Python file has a syntax error. Check indentation and the replacement.") from None
+            except SyntaxError as error:
+                location = f"line {error.lineno}" if error.lineno else "an unknown line"
+                detail = error.msg or "invalid syntax"
+                raise ProposalError(
+                    f"Python syntax error at {location}: {detail}. Correct the indentation or syntax in the proposed edit."
+                ) from None
             if test_task:
                 try:
                     previous = self.last_edit

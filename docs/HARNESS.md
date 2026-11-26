@@ -84,7 +84,7 @@ Use the test executable and arguments appropriate for that project. Put `--test`
 - `/search discount_price` finds excerpts without inference. `/ask Where is discount_price called?` sends up to three line-numbered excerpts to Qwen. Plain repository lookups also search the selected workspace. Git searches across visible files for matching Python declarations. A second pass ranks text in up to 48 matching files. Selected Python definitions include a qualified name when they parse successfully.
 - A short question asking where one exact symbol is defined can start with one excerpt and a short prompt. The agent uses the full evidence path when the definition is ambiguous, the request asks for callers or wider context, or conversation history is available. If the small reply omits the expected location or reports insufficient evidence, the agent tries the full context.
 - For broad questions such as “Tell me about this codebase,” the agent supplies a bounded Git-visible file listing and an excerpt from the root README when available.
-- `/edit Fix discount_price in pricing.py to subtract the discount` asks Qwen for one replacement at numbered lines from the shown source. The response schema constrains the file and line choices. The agent validates the range and can retry a rejected proposal once. Python replacements are syntax-checked. On additive Python test requests it checks that original test functions are preserved and a new one exists. `/apply ID` writes the previewed edit after checking the original file bytes.
+- `/edit Fix discount_price in pricing.py to subtract the discount` asks Qwen for one replacement at numbered lines from the shown source. The response schema constrains the file and line choices. The agent validates the range and can retry a rejected proposal once. Python replacements are syntax-checked, with the parser's line and error kind included in a syntax retry. For additive Python tests, the agent retains implementation excerpts even when the target test file is named, and anchors insertion after the last visible existing test. Validation checks that original test functions are preserved and a new one exists. `/apply ID` writes the previewed edit after checking the original file bytes.
 - Edit prompts add test-preservation instructions and validation feedback when the request needs them. The file, line, syntax and approval checks still run independently of the prompt.
 - `/test` runs the configured command with a 60-second timeout and shows its exit code and output tail. If it fails after applying an edit, `/retry` can propose one correction using the failure output. Review and apply the new diff, then run the test again.
 - `--browser` prints a loopback URL. Both clients share the pending proposal and the browser displays the latest 20 command results, including terminal commands. Browser edits and tests require confirmation. Pending approvals end with `/quit` or Ctrl+C.
@@ -97,6 +97,23 @@ On the Windows RX 570, the agent reused the running Qwen3-4B instance with a 4K 
 The [research notes](../RESEARCH.md) explain the design choices and lay out experiments for repository indexing, history retrieval and verified coding tasks.
 
 ## Tests and benchmark
+
+### Edit regression benchmark
+
+Run from the checkout. The full run uses seeds 7, 19 and 42, and starts one 4K runner if none is active.
+
+```powershell
+python -X utf8 -E -B benchmarks/benchmark_edits.py --check-fixtures
+python -X utf8 -E -B benchmarks/benchmark_edits.py
+```
+
+Use `python3` on macOS or Linux. An active runner must already be at 4K. Use `--case billing --seed 19` for a single edit and its corresponding lookup check. By default, an unverified edit is replayed from a clean fixture with hand-supplied source. Use `--no-oracle` to skip those controls.
+
+The four cases cover the billing control, a regional pricing change, a stock reservation boundary bug, and an additive regression test. They run against two synthetic repositories created in disposable directories. The verifier checks original tests and task-specific behaviour. For test generation it also checks that the new test catches a known broken implementation and that the original tests remain intact.
+
+The report distinguishes a valid first model proposal, a verified first proposal, and eventual success. It records model calls and tokens, elapsed time, proposed changes, test output, and the evidence sent to the model. By default, it writes `.local-ai/edit-benchmark/results.json` and a local runner log. These files are ignored by Git.
+
+### Chat benchmark
 
 ```powershell
 python -E -B .\tests\test_harness.py

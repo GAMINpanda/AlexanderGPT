@@ -104,6 +104,22 @@ class TerminalAgentTests(unittest.TestCase):
         self.assertEqual(properties["start"]["enum"], [1, 2])
         self.assertEqual(self.source.read_bytes(), self.original)
 
+    def test_syntax_retry_reports_error_location_and_kind(self):
+        def draft(new):
+            return {"message": {"content": json.dumps({
+                "path": "pricing.py", "start": 2, "end": 2,
+                "new": new, "note": "Fix discount.",
+            })}}, {}
+
+        with patch.object(chat, "count_prompt", return_value=20), \
+             patch.object(chat, "complete", side_effect=[
+                 draft("    return price - discount\n  broken"),
+                 draft("    return price - discount"),
+             ]) as complete:
+            self.session.propose("Fix the total.", self.hits, "")
+        self.assertIn("syntax error at line", complete.call_args.args[0][0]["content"])
+        self.assertIn("indentation", complete.call_args.args[0][0]["content"])
+
     def test_adding_python_test_cannot_replace_existing_test(self):
         original = "def test_original():\n    assert True\n"
         extra = "def test_extra():\n    assert 2 + 2 == 4\n"
@@ -115,12 +131,32 @@ class TerminalAgentTests(unittest.TestCase):
             })}}, {}
 
         with patch.object(chat, "count_prompt", return_value=20), \
-             patch.object(chat, "complete", side_effect=[draft(1, 2, extra), draft(1, 0, "\n" + extra)]) as complete:
+             patch.object(chat, "complete", side_effect=[draft(1, 2, extra), draft(2, 0, "\n" + extra)]) as complete:
             preview = self.session.propose("Add a regression test.", hits, "")
         self.assertIn("Preserve existing test functions", complete.call_args.args[0][0]["content"])
+        self.assertEqual(complete.call_args.kwargs["schema"]["properties"]["start"]["enum"], [2])
         self.assertEqual(complete.call_args.kwargs["schema"]["properties"]["end"]["enum"], [0])
         self.assertIn("+def test_extra()", preview)
         self.assertNotIn("-def test_original()", preview)
+
+    def test_adding_test_keeps_retrieved_implementation_evidence(self):
+        tests = "import unittest\nfrom inventory import available\n\nclass InventoryTests(unittest.TestCase):\n    def test_existing(self):\n        self.assertTrue(available(3, 1))\n"
+        implementation = "def available(stock, held):\n    return max(0, stock - held)\n"
+        hits = [
+            ({"name": "test_inventory.py", "line": 1, "text": tests}, tests.encode()),
+            ({"name": "inventory.py", "line": 1, "text": implementation}, implementation.encode()),
+        ]
+        reply = {"message": {"content": json.dumps({
+            "path": "test_inventory.py", "start": 6, "end": 0,
+            "new": "\n    def test_excess_holds(self):\n        self.assertEqual(available(2, 5), 0)",
+            "note": "Check excess holds.",
+        })}}
+        with patch.object(chat, "count_prompt", return_value=20), \
+             patch.object(chat, "complete", return_value=(reply, {})) as complete:
+            self.session.propose("Add a regression test to test_inventory.py proving available returns zero when held exceeds stock.", hits, "")
+        prompt = "\n".join(message["content"] for message in complete.call_args.args[0])
+        self.assertIn("def available(stock, held)", prompt)
+        self.assertIn("test_inventory.py", prompt)
 
     def test_complete_python_function_is_aligned_to_its_shown_definition(self):
         revised = self.original.decode().replace("\r\n", "\n").replace("price + discount", "price - discount")
@@ -224,7 +260,7 @@ class TerminalAgentTests(unittest.TestCase):
 
     def test_edit_prompt_adds_test_and_repair_instructions_only_when_needed(self):
         self.assertNotIn("Add a test by setting", agent.edit_instructions(False, False, ""))
-        self.assertIn("Add a test by setting", agent.edit_instructions(True, True, ""))
+        self.assertIn("exact ending line as the insertion anchor", agent.edit_instructions(True, True, ""))
         self.assertIn("Repair the newly added test", agent.edit_instructions(True, False, ""))
         self.assertIn("Use a valid range", agent.edit_instructions(False, False, "Use a valid range"))
 

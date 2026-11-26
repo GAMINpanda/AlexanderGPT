@@ -35,6 +35,7 @@
 !/benchmarks/benchmark-baseline.zip
 !/benchmarks/benchmark-results.json
 !/benchmarks/benchmark_harness.py
+!/benchmarks/benchmark_edits.py
 
 /docs/*
 !/docs/HARNESS.md

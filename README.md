@@ -40,6 +40,8 @@ Open [the custom chat](http://127.0.0.1:8082) or [native llama.cpp chat](http://
 
 Run `python3 -E -B tests/test_harness.py` on macOS or Linux, or `python -E -B .\tests\test_harness.py` on Windows. The regression suite covers platform profiles, workspace routing, history recall and edit approvals. Live Windows checks cover repository search, a follow-up answered from history, and a fix verified through the shared terminal and browser session. Native inference on macOS and Linux is pending hardware validation. See [RESEARCH.md](RESEARCH.md) for the design rationale, evidence and evaluation roadmap.
 
+Run `python -X utf8 -E -B benchmarks/benchmark_edits.py` for the [4K edit regression benchmark](docs/HARNESS.md#edit-regression-benchmark). Its fixtures, logs and results are generated locally.
+
 ## Repository layout
 
 | Folder | Contents |

@@ -16,15 +16,18 @@
 - `web/` contains the browser UI, metrics, and Markdown and KaTeX rendering. Direct attachments stay available in the browser tab until removed. Selected excerpts go in the current user message, with token budgeting, so older missing-file replies do not take precedence. Folder grants are single-turn. File turns suppress web search.
 - The chat serves coding and general tasks. Web research is opt-in. Explicit references to the user's repository can offer the existing single-turn folder picker without a model call. The optional SearXNG template expects Docker or a JSON-enabled instance.
 - **Review answer** runs on the same model with a 3,072-token working budget that can expand to the startup context. The reviewer gets one shorter retry if the notes exceed the reply budget. Only validated notes are saved beside the draft. GPU context allocation changes require a restart.
-- `server/terminal_agent.py` runs a 4K-first coding session. Git searches Python declarations and the agent renders AST-qualified numbered excerpts. Unambiguous exact-definition questions without prior context can start with one excerpt and fall back to the normal path. Editing uses task-specific instructions, constrained ranges, syntax and test checks, and approval. SQLite stores workspace-scoped Q&A. Resume with `--session` or share the live session with `--browser`.
+- `server/terminal_agent.py` runs a 4K-first coding session. Git searches Python declarations and the agent renders AST-qualified numbered excerpts. Unambiguous exact-definition questions without prior context can start with one excerpt and fall back to the normal path. Test-add requests retain relevant implementation excerpts even when a target test file is named, then anchor insertion after the last visible test. Syntax retries include the parser's line and error. Edits still require approval and can be checked with `/test` and `/retry`. SQLite stores workspace-scoped Q&A. Resume with `--session` or share the live session with `--browser`.
 
 ## Verification
 
 ```powershell
 python -E -B .\tests\test_harness.py
 python -E -B .\benchmarks\benchmark_harness.py
+python -X utf8 -E -B .\benchmarks\benchmark_edits.py --check-fixtures
 ```
 
-Use `python3` on macOS and Linux. All 33 tests passed. The 4K fixture checks cover exact citations, billing repair, additive test preservation, history and browser search. Native macOS/Linux runs remain unverified.
+Use `python3` on macOS and Linux. All 35 tests passed. The 4K fixture checks cover exact citations, billing repair, implementation evidence for additive tests, anchored insertion, syntax feedback, history and browser search. Native macOS/Linux runs remain unverified.
 
 The ignored `.local-ai/agent-tasks/` directory contains clean fixtures and scored reports. In `ADAPTIVE.md`, focused lookup passed 3/3 at 218 input tokens versus 1,100. The experimental short edit prompt passed 0/3 against 3/3 for the fuller prompt, which remains in production. Repeat across more tasks before widening the focused path.
+
+`benchmarks/benchmark_edits.py` builds two disposable repositories and checks four edits plus focused lookups across seeds 7, 19 and 42. Run `--check-fixtures` to validate reference patches without loading a model. With syntax feedback, AST-anchored test insertion and retained implementation excerpts, the full 4K run passed 12/12 edits (9 first proposal, 3 regional edits after retry) and 3/3 lookups. Treat this synthetic three-seed result as a useful signal, not a general reliability estimate. The raw report is ignored under `.local-ai/edit-benchmark/`.
