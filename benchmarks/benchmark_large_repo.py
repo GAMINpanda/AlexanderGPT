@@ -25,10 +25,10 @@ NAVIGATION = [
     {"name": "unquote_plus", "prompt": "Where is unquote_plus defined in this codebase? What does it do with plus signs before decoding?",
      "path": "Lib/urllib/parse.py", "line": 780,
      "checks": [r"unquote_plus", r"Lib[/\\]urllib[/\\]parse\.py", r"plus", r"space"]},
-    {"name": "with_suffix", "prompt": "Find the method that returns a new path with a different file extension. Cite its definition.",
+    {"name": "with_suffix", "prompt": "Find the method in this codebase that returns a new path with a different file extension. Cite its definition.",
      "path": "Lib/pathlib.py", "line": 770,
      "checks": [r"with_suffix", r"Lib[/\\]pathlib\.py"]},
-    {"name": "html_base_callback", "prompt": "Find the base parser callback invoked for an opening HTML tag. Cite the method definition, not an override.",
+    {"name": "html_base_callback", "prompt": "Find the base parser callback in this codebase invoked for an opening HTML tag. Cite the method definition, not an override.",
      "path": "Lib/html/parser.py", "line": 430,
      "checks": [r"HTMLParser\.handle_starttag", r"Lib[/\\]html[/\\]parser\.py"]},
     {"name": "overview", "prompt": "Could you tell me about this codebase?",
@@ -86,6 +86,9 @@ def check_fixtures():
     files = agent.Workspace(SOURCE).names()
     if len(files) < 1700:
         raise SystemExit(f"Expected a large CPython workspace (at least 1,700 files); found {len(files)}.")
+    for task in NAVIGATION:
+        if task.get("path") and not agent.chat.references_workspace(task["prompt"]):
+            raise SystemExit(f"Navigation prompt {task['name']} does not trigger workspace lookup.")
     source = (SOURCE / "Lib/urllib/parse.py").read_text(encoding="utf-8")
     if source.splitlines()[779].strip() != "def unquote_plus(string, encoding='utf-8', errors='replace'):":
         raise SystemExit("Pinned CPython symbol line does not match the answer key.")
