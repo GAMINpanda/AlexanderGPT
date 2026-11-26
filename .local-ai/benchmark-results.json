@@ -1,0 +1,126 @@
+{
+  "baseline": [
+    {
+      "case": "simple",
+      "correct": true,
+      "completed": true,
+      "seconds": 15.602,
+      "calls": 2,
+      "input_tokens": 149,
+      "generated_tokens": 166,
+      "answer": "84"
+    },
+    {
+      "case": "irrelevant_history",
+      "correct": true,
+      "completed": true,
+      "seconds": 12.771,
+      "calls": 2,
+      "input_tokens": 192,
+      "generated_tokens": 121,
+      "answer": "9467"
+    },
+    {
+      "case": "long_history",
+      "correct": true,
+      "completed": true,
+      "seconds": 13.624,
+      "calls": 2,
+      "input_tokens": 197,
+      "generated_tokens": 142,
+      "answer": "RAVEN-42"
+    },
+    {
+      "case": "multi_step",
+      "correct": true,
+      "completed": true,
+      "seconds": 102.495,
+      "calls": 2,
+      "input_tokens": 345,
+      "generated_tokens": 928,
+      "answer": "To determine how many minutes are needed to process 384 jobs at the same rate as 120 jobs in 5 minutes, follow these steps:\n\n1. **Find the rate of job processing**:  \n   The service processes 120 jobs in 5 minutes.  \n   Rate = $ \\frac{120 \\text{ jobs}}{5 \\text{ minutes}} = 24 \\text{ jobs per minute} $.\n\n2. **Calculate the time for 384 jobs**:  \n   Time = $ \\frac{384 \\text{ jobs}}{24 \\text{ jobs per minute}} = 16 \\text{ minutes} $.\n\n**Answer**: It takes **16 minutes** to process 384 jobs."
+    },
+    {
+      "case": "coding",
+      "correct": true,
+      "completed": true,
+      "seconds": 71.09,
+      "calls": 2,
+      "input_tokens": 345,
+      "generated_tokens": 789,
+      "answer": "To sort a list of values in **descending order** using Python's `sorted()` function **without mutating the original list**, you can use the `reverse=True` parameter. This approach returns a new sorted list and leaves the original unchanged.\n\n### Example Code:\n```python\noriginal_list = [3, 1, 4, 1, 5]\nsorted_list = sorted(original_list, reverse=True)\nprint(\"Original:\", original_list)\nprint(\"Sorted (descending):\", sorted_list)\n```\n\n### Output:\n```\nOriginal: [3, 1, 4, 1, 5]\nSorted (descending): [5, 4, 3, 1, 1]\n```\n\n### Key Points:\n- `sorted()` **does not modify the original list**.\n- The `reverse=True` argument ensures the list is sorted in **descending order**.\n- This method works for any list of comparable elements (e.g., numbers, strings, etc.)."
+    },
+    {
+      "case": "math",
+      "correct": true,
+      "completed": true,
+      "seconds": 70.133,
+      "calls": 2,
+      "input_tokens": 370,
+      "generated_tokens": 798,
+      "answer": "To solve the system of equations:\n\n1. $ x + y = 19 $  \n2. $ x - y = 5 $\n\n**Step 1:** Add the two equations to eliminate $ y $:  \n$$\n(x + y) + (x - y) = 19 + 5 \\implies 2x = 24 \\implies x = 12\n$$\n\n**Step 2:** Substitute $ x = 12 $ into the first equation to find $ y $:  \n$$\n12 + y = 19 \\implies y = 19 - 12 \\implies y = 7\n$$\n\n**Verification:**  \n- $ x + y = 12 + 7 = 19 $ \u2705  \n- $ x - y = 12 - 7 = 5 $ \u2705  \n\n**Final Answer:**  \n$ x = 12 $ and $ y = 7 $."
+    }
+  ],
+  "optimised": [
+    {
+      "case": "simple",
+      "correct": true,
+      "completed": true,
+      "seconds": 1.178,
+      "calls": 1,
+      "input_tokens": 75,
+      "generated_tokens": 3,
+      "answer": "84"
+    },
+    {
+      "case": "irrelevant_history",
+      "correct": true,
+      "completed": true,
+      "seconds": 2.949,
+      "calls": 1,
+      "input_tokens": 306,
+      "generated_tokens": 5,
+      "answer": "9467"
+    },
+    {
+      "case": "long_history",
+      "correct": true,
+      "completed": true,
+      "seconds": 3.058,
+      "calls": 1,
+      "input_tokens": 309,
+      "generated_tokens": 6,
+      "answer": "RAVEN-42"
+    },
+    {
+      "case": "multi_step",
+      "correct": true,
+      "completed": true,
+      "seconds": 76.106,
+      "calls": 1,
+      "input_tokens": 89,
+      "generated_tokens": 866,
+      "answer": "To determine how many minutes are required to process 384 jobs at the same rate as 120 jobs in 5 minutes, follow these steps:\n\n1. **Calculate the rate of job processing**:  \n   The service processes 120 jobs in 5 minutes.  \n   Rate = $ \\frac{120 \\text{ jobs}}{5 \\text{ minutes}} = 24 \\text{ jobs per minute} $.\n\n2. **Determine the time to process 384 jobs**:  \n   Time = $ \\frac{\\text{Number of jobs}}{\\text{Rate}} = \\frac{384 \\text{ jobs}}{24 \\text{ jobs per minute}} = 16 \\text{ minutes} $.\n\n**Final Answer**:  \nThe service will take **16 minutes** to process 384 jobs.  \n\n**Calculation**:  \n$$\n\\frac{384 \\text{ jobs}}{24 \\text{ jobs/minute}} = 16 \\text{ minutes}\n$$"
+    },
+    {
+      "case": "coding",
+      "correct": true,
+      "completed": true,
+      "seconds": 18.763,
+      "calls": 1,
+      "input_tokens": 74,
+      "generated_tokens": 199,
+      "answer": "Here's a Python code snippet that demonstrates how to order values in descending order using the `sorted` function without mutating the original values:\n\n```python\n# Original list of values\nvalues = [10, 20, 30, 40, 50]\n\n# Sort the values in descending order using sorted\nsorted_values = sorted(values, reverse=True)\n\n# Print the sorted values\nprint(sorted_values)\n```\n\n### Explanation:\n- `sorted(values, reverse=True)` sorts the list `values` in descending order.\n- The `reverse=True` parameter is used to sort in descending order.\n- The original list `values` remains unchanged, as `sorted` returns a new sorted list without modifying the original.\n\n### Output:\n```\n[50, 40, 30, 20, 10]\n```\n\nThis code ensures that the original values are not mutated and provides a new list that is sorted in descending order."
+    },
+    {
+      "case": "math",
+      "correct": true,
+      "completed": true,
+      "seconds": 57.81,
+      "calls": 1,
+      "input_tokens": 81,
+      "generated_tokens": 642,
+      "answer": "To solve the system of equations:\n\n$$\n\\begin{cases}\nx + y = 19 \\quad \\text{(1)} \\\\\nx - y = 5 \\quad \\text{(2)}\n\\end{cases}\n$$\n\n**Step 1: Add equations (1) and (2) to eliminate $ y $:**  \n$$\n(x + y) + (x - y) = 19 + 5 \\\\\n2x = 24 \\\\\nx = 12\n$$\n\n**Step 2: Substitute $ x = 12 $ into equation (1) to find $ y $:**  \n$$\n12 + y = 19 \\\\\ny = 19 - 12 \\\\\ny = 7\n$$\n\n**Verification:**  \n- $ x + y = 12 + 7 = 19 $ \u2714\ufe0f  \n- $ x - y = 12 - 7 = 5 $ \u2714\ufe0f  \n\n**Final Answer:**  \n$ x = 12 $ and $ y = 7 $."
+    }
+  ]
+}

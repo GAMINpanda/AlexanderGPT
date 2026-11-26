@@ -1,0 +1,789 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Local coding chat</title>
+<link rel="stylesheet" href="/assets/katex-0.19.1/katex.min.css">
+<script defer src="/assets/katex-0.19.1/katex.min.js"></script>
+<script defer src="/assets/markdown-it.js"></script>
+<script defer src="/assets/reply-markdown.js"></script>
+<script defer src="/assets/file-sharing.js"></script>
+<style>
+  :root {
+    color-scheme: dark;
+    font: 15px/1.6 system-ui, sans-serif;
+    background: #151817;
+    color: #eef1ed;
+    --panel: #1d2220;
+    --line: #323a35;
+    --muted: #a5b1aa;
+    --accent: #a6dbbe;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; }
+  .workspace { height: 100dvh; display: grid; grid-template-columns: 17rem minmax(0, 1fr); }
+  aside { display: flex; flex-direction: column; min-height: 0; gap: 1rem; padding: 1rem; background: #191d1b; border-right: 1px solid var(--line); }
+  aside h2 { margin: 0; color: var(--muted); font-size: .75rem; text-transform: uppercase; letter-spacing: .09em; }
+  #chat-list { overflow: auto; min-height: 0; display: flex; flex-direction: column; gap: .2rem; }
+  #chat-list button { display: block; width: 100%; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; background: transparent; border-color: transparent; }
+  #chat-list button:hover { background: #232a26; }
+  #chat-list button[aria-current=true] { background: #29352e; border-color: #445a4c; color: #e1f0e6; }
+  #reset { width: 100%; text-align: left; color: var(--accent); }
+  main { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  header { padding: .85rem clamp(1rem, 4vw, 3rem); border-bottom: 1px solid var(--line); display: flex; gap: .85rem; align-items: center; }
+  header div { min-width: 0; }
+  h1 { margin: 0; font-size: 1rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  header p { margin: 0; color: var(--muted); font-size: .8rem; }
+  #toggle-sidebar { display: none; }
+  #history { flex: 1; min-height: 0; overflow: auto; scrollbar-gutter: stable; }
+  .column { width: min(100%, 52rem); padding: 0 clamp(1rem, 4vw, 2rem); margin-inline: auto; }
+  .messages { padding-block: 1.25rem; }
+  #empty { margin: min(13vh, 7rem) 0; }
+  #empty h2 { margin: 0; font-weight: 550; letter-spacing: -.035em; font-size: clamp(1.6rem, 4vw, 2.4rem); }
+  #empty p { margin: .25rem 0; color: var(--muted); }
+  article { margin: 0 0 1.1rem; padding: .95rem 1.1rem; background: var(--panel); border: 1px solid var(--line); border-radius: .85rem; }
+  article.user { background: #25322a; border-color: #3c5042; margin-inline-start: clamp(0rem, 7vw, 5rem); }
+  article > strong { font-size: .8rem; color: var(--accent); }
+  article details summary, .memory summary { cursor: pointer; }
+  .compose { border-top: 1px solid var(--line); background: #181c19; padding-block: .65rem .45rem; }
+  .memory { color: var(--muted); font-size: .8rem; margin-bottom: .45rem; }
+  .memory pre { max-height: 9rem; overflow: auto; }
+  form { background: var(--panel); border: 1px solid #3d4840; border-radius: .9rem; padding: .5rem .65rem; }
+  form:focus-within { border-color: #658875; }
+  textarea { display: block; width: 100%; min-height: 3rem; max-height: 10rem; padding: .4rem .3rem; border: 0; outline: 0; color: inherit; background: transparent; resize: vertical; font: inherit; }
+  textarea::placeholder { color: #95a39a; }
+  .controls { display: flex; align-items: center; gap: .45rem .85rem; flex-wrap: wrap; font-size: .82rem; }
+  .controls > label { color: var(--muted); }
+  .controls input { accent-color: var(--accent); vertical-align: middle; }
+  .file-tools summary { cursor: pointer; }
+  .file-tools[open] { flex-basis: 100%; }
+  .file-tools input[type=text] { font: inherit; padding: .3rem .45rem; margin: .25rem; max-width: 100%; background: #202622; color: inherit; border: 1px solid var(--line); border-radius: .4rem; }
+  #attachment-list { display: flex; flex-wrap: wrap; gap: .35rem; }
+  #attachment-list button { font-size: .78rem; }
+  #file-permission { padding: .55rem .75rem; margin-bottom: .5rem; background: var(--panel); border: 1px solid var(--line); border-radius: .65rem; }
+  #file-permission p { margin: .2rem 0; font-size: .82rem; overflow-wrap: anywhere; }
+  button, select { font: inherit; color: inherit; background: #272e29; border: 1px solid #3d4840; border-radius: .52rem; padding: .34rem .65rem; }
+  button { cursor: pointer; }
+  button:hover:not(:disabled) { border-color: #779b84; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button[type=submit] { margin-inline-start: auto; background: var(--accent); color: #14251b; font-weight: 650; }
+  button:disabled { cursor: default; opacity: .55; }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; margin: .35rem 0; font: inherit; }
+  a { color: var(--accent); overflow-wrap: anywhere; }
+  .status { color: var(--muted); font-size: .78rem; min-height: 1.25rem; margin: .2rem .1rem 0; }
+  details, .metrics { color: var(--muted); font-size: .84rem; }
+  .metrics { margin: .5rem 0 0; }
+  .metrics meter { display: block; width: min(100%, 15rem); }
+  .thinking-panel { margin: 0 0 .55rem; padding: .55rem 1rem; border: 1px solid var(--line); border-radius: .65rem; background: #191e1b; }
+  .thinking-panel summary { cursor: pointer; }
+  .review-panel { background: #1d2724; border-color: #40594e; }
+  .review-controls { margin-top: .65rem; }
+  .review-controls button { font-size: .8rem; }
+  .thinking-panel pre, #live-output pre { max-height: 20rem; overflow-y: auto; }
+  .reply-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .reply-text.markdown { white-space: normal; }
+  .reply-text.markdown > :first-child { margin-top: .35rem; }
+  .reply-text.markdown > :last-child { margin-bottom: 0; }
+  .reply-text :is(p, ul, ol, blockquote, table) { margin: .65rem 0; }
+  .reply-text :is(h1, h2, h3, h4, h5, h6) { margin: .95rem 0 .35rem; font-size: 1.05em; line-height: 1.35; white-space: normal; }
+  .reply-text :is(h1, h2) { font-size: 1.2em; }
+  .reply-text :is(ul, ol) { padding-inline-start: 1.5rem; }
+  .reply-text li > p { margin: .25rem 0; }
+  .reply-text blockquote { border-inline-start: 3px solid var(--accent); padding-inline-start: .8rem; color: var(--muted); }
+  .reply-text table { display: block; width: fit-content; max-width: 100%; overflow: auto; border-collapse: collapse; }
+  .reply-text :is(th, td) { padding: .35rem .65rem; border: 1px solid var(--line); text-align: start; }
+  .reply-text th { background: #27322a; }
+  .reply-text hr { border: 0; border-top: 1px solid var(--line); margin: .9rem 0; }
+  .reply-text .katex-display, .reply-text pre { overflow-x: auto; }
+  .reply-text pre { white-space: pre; padding: .65rem .8rem; border-radius: .5rem; background: #151917; }
+  .reply-text code { font: .9em/1.55 ui-monospace, Consolas, monospace; }
+  .reply-text :not(pre) > code { background: #151917; padding: .1em .3em; border-radius: .25em; }
+  #live-answer { max-height: 24rem; overflow: auto; }
+  @media (max-width: 720px) {
+    .workspace { grid-template-columns: minmax(0, 1fr); }
+    aside { display: none; }
+    .workspace.sidebar-open { grid-template-rows: minmax(0, 34dvh) minmax(0, 1fr); }
+    .workspace.sidebar-open aside { display: flex; border-right: 0; border-bottom: 1px solid var(--line); gap: .5rem; padding: .7rem 1rem; }
+    #toggle-sidebar { display: block; flex: none; }
+  }
+</style>
+<div class="workspace">
+  <aside id="sidebar" aria-label="Chat sidebar">
+    <button id="reset" type="button">＋ New chat</button>
+    <h2>Chats</h2>
+    <nav id="chat-list" aria-label="Conversations"></nav>
+  </aside>
+  <main>
+    <header>
+      <button id="toggle-sidebar" type="button" aria-controls="sidebar" aria-expanded="false">Chats</button>
+      <div><h1 id="chat-title">New chat</h1><p>Qwen3-4B · {{CONTEXT_SIZE}}-token context</p></div>
+    </header>
+    <div id="history">
+      <div class="column messages">
+        <div id="empty"><h2>What are you working on?</h2><p>Ask a coding question or paste a short excerpt.</p></div>
+        <section id="transcript" aria-label="Transcript"></section>
+        <article id="live-user" class="user" hidden><strong>You</strong><pre></pre></article>
+        <details id="live-thinking" class="thinking-panel" open hidden><summary>Thinking</summary><pre id="live-reasoning"></pre></details>
+        <article id="live-output" hidden>
+          <strong>Answer</strong>
+          <div id="live-answer" class="reply-text" aria-label="Reply in progress"></div>
+        </article>
+      </div>
+    </div>
+    <div class="compose">
+      <div class="column">
+        <details class="memory"><summary id="memory-label">Conversation memory</summary><pre id="memory"></pre></details>
+        <section id="file-permission" aria-label="File search permission" hidden>
+          <strong>Qwen is asking to search files</strong>
+          <p id="file-reason"></p><p id="file-query"></p>
+          <div class="controls">
+            <button id="approve-files" type="button">Choose folder and allow once</button>
+            <button id="decline-files" type="button">Continue without files</button>
+          </div>
+        </section>
+        <form id="chat">
+          <div id="attachment-list" aria-label="Attached files"></div>
+          <textarea id="prompt" aria-label="Prompt" aria-description="Enter sends. Shift+Enter starts a new line." rows="2" placeholder="Message Qwen…" required></textarea>
+          <div class="controls">
+            <details class="file-tools"><summary>Attach file</summary>
+              <button id="pick-file" type="button">Choose file…</button>
+              <input id="file-path" type="text" aria-label="Absolute file path" placeholder="C:\project\main.py">
+              <button id="attach-path" type="button">Attach path</button>
+              <div>Text and source files up to 512 KiB. Qwen reads excerpts from larger files.</div>
+            </details>
+            <label>Mode <select id="mode"><option value="auto">Auto</option><option value="think">Think</option><option value="quick">Quick</option></select></label>
+            <label><input id="search" type="checkbox" checked> SearXNG research</label>
+            <button id="retry" type="button" hidden>Retry compaction</button>
+            <button type="submit" id="send">Send</button>
+          </div>
+        </form>
+        <input id="file-picker" type="file" multiple hidden>
+        <input id="folder-picker" type="file" webkitdirectory multiple hidden>
+        <p class="status" id="status" role="status"></p>
+      </div>
+    </div>
+  </main>
+</div>
+<script>
+  const key = 'local-coding-chat-v1';
+  const form = document.querySelector('#chat');
+  const prompt = document.querySelector('#prompt');
+  const mode = document.querySelector('#mode');
+  const search = document.querySelector('#search');
+  const transcript = document.querySelector('#transcript');
+  const history = document.querySelector('#history');
+  const empty = document.querySelector('#empty');
+  const liveUser = document.querySelector('#live-user');
+  const liveOutput = document.querySelector('#live-output');
+  const liveThinking = document.querySelector('#live-thinking');
+  const liveReasoning = document.querySelector('#live-reasoning');
+  const liveAnswer = document.querySelector('#live-answer');
+  const memory = document.querySelector('#memory');
+  const memoryLabel = document.querySelector('#memory-label');
+  const status = document.querySelector('#status');
+  const send = document.querySelector('#send');
+  const retry = document.querySelector('#retry');
+  const reset = document.querySelector('#reset');
+  const sidebar = document.querySelector('.workspace');
+  const toggleSidebar = document.querySelector('#toggle-sidebar');
+  const chatList = document.querySelector('#chat-list');
+  const chatTitle = document.querySelector('#chat-title');
+  const attachmentList = document.querySelector('#attachment-list');
+  const filePicker = document.querySelector('#file-picker');
+  const folderPicker = document.querySelector('#folder-picker');
+  const filePath = document.querySelector('#file-path');
+  const filePermission = document.querySelector('#file-permission');
+  const fileReason = document.querySelector('#file-reason');
+  const fileQuery = document.querySelector('#file-query');
+  const approveFiles = document.querySelector('#approve-files');
+  const declineFiles = document.querySelector('#decline-files');
+  const attachmentDrafts = new Map();
+  const fileRequests = new Map();
+  let folderRequest;
+  let liveText = '';
+  let liveRenderTimer;
+  const archived = new Map();
+  const loaded = new Map();
+  const formattedAnswers = new WeakMap();
+  const reviewEvidence = new WeakMap();
+  const cacheKey = key + '-chat-';
+  let state = {summary: '', turns: [], pending: false};
+  try { state = JSON.parse(sessionStorage.getItem(key)) ?? state; } catch {}
+  if (!state.conversation) {
+    let previous;
+    try { previous = localStorage.getItem(key + '-conversation'); } catch {}
+    state.conversation = (!state.turns.length && previous) || crypto.randomUUID();
+  }
+  let busy = false;
+  let renderedConversation;
+
+  function save() {
+    loaded.set(state.conversation, state);
+    try { sessionStorage.setItem(key, JSON.stringify(state)); } catch {}
+    try { localStorage.setItem(key + '-conversation', state.conversation); } catch {}
+  }
+  save();
+
+  function titleFor(text) {
+    const title = (text || '').replace(/\s+/g, ' ').trim();
+    return title.length > 70 ? title.slice(0, 69) + '…' : title || 'New chat';
+  }
+
+  function renderAnswer(turn) {
+    const ready = typeof window.renderReplyMarkdown === 'function';
+    const cached = formattedAnswers.get(turn);
+    if (cached?.ready === ready) return cached.element;
+    const element = document.createElement('div');
+    element.className = 'reply-text';
+    renderOutput(element, turn.answer);
+    formattedAnswers.set(turn, {element, ready});
+    return element;
+  }
+
+  function renderOutput(element, text) {
+    if (window.renderReplyMarkdown) window.renderReplyMarkdown(element, text);
+    else element.textContent = text;
+  }
+
+  function paintLiveAnswer() {
+    liveRenderTimer = undefined;
+    const follow = nearBottom();
+    renderOutput(liveAnswer, liveText);
+    liveAnswer.scrollTop = liveAnswer.scrollHeight;
+    if (follow) scrollToLatest();
+  }
+
+  function renderSidebar() {
+    const entries = new Map(archived);
+    for (const [id, chat] of loaded) {
+      if (chat.turns.length || chat.draft || id === state.conversation) {
+        entries.set(id, chat.turns[0]?.prompt || chat.draft || entries.get(id));
+      }
+    }
+    const active = titleFor(entries.get(state.conversation));
+    chatTitle.textContent = active;
+    chatTitle.title = active;
+    const ordered = [
+      ...[...entries].filter(([id]) => !archived.has(id)),
+      ...[...entries].filter(([id]) => archived.has(id)),
+    ];
+    const existing = new Map([...chatList.children].map(button => [button.dataset.id, button]));
+    for (const [index, [id, label]] of ordered.entries()) {
+      let button = existing.get(id);
+      if (!button) {
+        button = document.createElement('button');
+        button.type = 'button';
+        button.dataset.id = id;
+        button.addEventListener('click', () => switchChat(id));
+      }
+      existing.delete(id);
+      button.textContent = titleFor(label);
+      button.title = button.textContent;
+      button.setAttribute('aria-current', String(id === state.conversation));
+      button.disabled = busy;
+      if (chatList.children[index] !== button) chatList.insertBefore(button, chatList.children[index] || null);
+    }
+    for (const button of existing.values()) button.remove();
+  }
+
+  function nearBottom() {
+    return history.scrollHeight - history.scrollTop - history.clientHeight < 90;
+  }
+
+  function scrollToLatest() {
+    history.scrollTop = history.scrollHeight;
+  }
+
+  function showSidebar(open) {
+    sidebar.classList.toggle('sidebar-open', open);
+    toggleSidebar.setAttribute('aria-expanded', String(open));
+  }
+
+  function saveOutgoing() {
+    state.draft = prompt.value;
+    if (state.turns.length || state.draft) {
+      save();
+      try { sessionStorage.setItem(cacheKey + state.conversation, JSON.stringify(state)); } catch {}
+    } else {
+      loaded.delete(state.conversation);
+    }
+  }
+
+  async function fetchArchive(id) {
+    const response = await fetch('/conversations/' + encodeURIComponent(id));
+    if (!response.ok) throw new Error('Could not open this saved chat.');
+    return response.json();
+  }
+
+  function openChat(next) {
+    state = next;
+    prompt.value = state.draft || '';
+    filePath.value = '';
+    status.textContent = '';
+    save();
+    showSidebar(false);
+    render();
+    scrollToLatest();
+    prompt.focus({preventScroll: true});
+  }
+
+  async function switchChat(id) {
+    if (busy || id === state.conversation) return;
+    saveOutgoing();
+    busy = true;
+    render();
+    try {
+      openChat(loaded.get(id) || await fetchArchive(id));
+    } catch (error) {
+      status.textContent = error.message;
+    } finally {
+      busy = false;
+      render();
+    }
+  }
+
+  function render() {
+    const follow = nearBottom() || renderedConversation !== state.conversation;
+    const openDetails = renderedConversation === state.conversation
+      ? [...transcript.querySelectorAll('details')].map(item => item.open) : [];
+    renderedConversation = state.conversation;
+    renderSidebar();
+    transcript.replaceChildren();
+    for (const turn of state.turns) {
+      for (const [role, text] of [['You', turn.prompt], ['Final answer', turn.answer]]) {
+        const isAnswer = role === 'Final answer';
+        if (isAnswer && turn.reasoning) {
+          const panel = document.createElement('details');
+          panel.className = 'thinking-panel';
+          const summary = document.createElement('summary');
+          summary.textContent = 'Thinking';
+          const reasoning = document.createElement('pre');
+          reasoning.textContent = turn.reasoning;
+          panel.append(summary, reasoning);
+          transcript.append(panel);
+        }
+        const article = document.createElement('article');
+        if (!isAnswer) article.className = 'user';
+        const label = document.createElement('strong');
+        label.textContent = role;
+        const content = isAnswer ? renderAnswer(turn) : document.createElement('pre');
+        if (!isAnswer) {
+          content.textContent = text;
+        }
+        article.append(label, content);
+        if (isAnswer && turn.file_names?.length) {
+          const attachments = document.createElement('div');
+          attachments.className = 'metrics';
+          attachments.textContent = 'Local files: ' + turn.file_names.join(', ')
+            + ` · ${turn.file_excerpts_used ?? 0} excerpts used`;
+          article.append(attachments);
+        }
+        const queries = turn.search_queries ?? (turn.search_query ? [turn.search_query] : []);
+        if (isAnswer && (queries.length || turn.search_error)) {
+          const research = document.createElement('details');
+          research.className = 'metrics';
+          const header = document.createElement('summary');
+          header.textContent = queries.length === 1 ? '1 web search' : `${queries.length} web searches`;
+          if (turn.search_error) header.textContent += ' · Research ended early';
+          const list = document.createElement('ol');
+          for (const query of queries) {
+            const item = document.createElement('li');
+            item.textContent = query;
+            list.append(item);
+          }
+          research.append(header, list);
+          if (turn.search_error) {
+            const warning = document.createElement('p');
+            warning.textContent = turn.search_error;
+            research.append(warning);
+          }
+          article.append(research);
+        }
+        if (isAnswer && turn.sources?.length) {
+          const links = document.createElement('ol');
+          for (const source of turn.sources) {
+            const item = document.createElement('li');
+            const link = document.createElement('a');
+            link.textContent = source.title;
+            if (/^https?:\/\//i.test(source.url)) link.href = source.url;
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            item.append(link);
+            links.append(item);
+          }
+          article.append(links);
+        }
+        if (isAnswer && turn.metrics) {
+          const {prompt_tokens: input, generated_tokens: output, context_size: size, tokens_per_second: speed} = turn.metrics;
+          const used = input + (output ?? 0);
+          const metrics = document.createElement('div');
+          metrics.className = 'metrics';
+          const label = document.createElement('div');
+          label.textContent = output == null
+            ? `Prompt context ${input} / ${size} tokens`
+            : `Context used ${used} / ${size} tokens · ${input} prompt + ${output} generated`;
+          if (Number.isFinite(speed)) label.textContent += ` · ${speed.toFixed(1)} tokens/s`;
+          if (turn.recalled_excerpts) label.textContent += ` · ${turn.recalled_excerpts} memory excerpts recalled`;
+          if (turn.metrics.reasoning_tokens) label.textContent += ` · ${turn.metrics.reasoning_tokens} thinking tokens`;
+          if (turn.metrics.cached_tokens) label.textContent += ` · ${turn.metrics.cached_tokens} cached input tokens`;
+          const meter = document.createElement('meter');
+          meter.max = size;
+          meter.value = Math.min(used, size);
+          meter.setAttribute('aria-label', 'Context used');
+          metrics.append(label, meter);
+          article.append(metrics);
+        }
+        if (isAnswer && turn.diagnostics) {
+          const diagnostic = document.createElement('details');
+          diagnostic.className = 'metrics';
+          const label = document.createElement('summary');
+          const stats = turn.diagnostics;
+          label.textContent = `${stats.inference_calls} inference calls · ${(stats.latency_ms / 1000).toFixed(1)}s`;
+          const details = document.createElement('pre');
+          details.textContent = Object.entries({...stats, ...turn.compactionDiagnostics})
+            .map(([key, value]) => `${key.replaceAll('_', ' ')}: ${value}`).join('\n');
+          diagnostic.append(label, details);
+          article.append(diagnostic);
+        }
+        if (isAnswer && turn.id) {
+          const actions = document.createElement('div');
+          actions.className = 'review-controls';
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.textContent = turn.review ? 'Review again' : 'Review answer';
+          button.disabled = busy || (state.pending && turn === state.turns.at(-1));
+          button.addEventListener('click', () => startReview(turn));
+          actions.append(button);
+          article.append(actions);
+        }
+        transcript.append(article);
+        if (isAnswer && turn.review) {
+          const panel = document.createElement('article');
+          panel.className = 'review-panel';
+          const label = document.createElement('strong');
+          label.textContent = 'Reviewer notes';
+          const body = document.createElement('div');
+          body.className = 'reply-text';
+          renderOutput(body, turn.review.text);
+          const details = document.createElement('div');
+          details.className = 'metrics';
+          const stats = turn.review.metrics;
+          const used = stats.prompt_tokens + (stats.generated_tokens ?? 0);
+          details.textContent = `${used.toLocaleString()} / ${turn.review.working_context.toLocaleString()} working tokens`
+            + (turn.review.limited ? ' · Review reached its reply limit' : '');
+          panel.append(label, body, details);
+          transcript.append(panel);
+        }
+      }
+    }
+    [...transcript.querySelectorAll('details')].forEach((item, index) => { item.open = openDetails[index] ?? false; });
+    empty.hidden = Boolean(state.turns.length) || !liveUser.hidden;
+    memory.textContent = [
+      state.summary,
+      ...Object.entries(state.taskState ?? {}).map(([key, value]) => `${key}: ${value}`),
+    ].filter(Boolean).join('\n') || (state.archivedTurns
+      ? 'Turns are archived. Relevant excerpts are recalled when needed.'
+      : 'Memory appears after the first reply.');
+    memoryLabel.textContent = state.memoryTokens == null
+      ? 'Conversation memory' : `Conversation memory · ${state.memoryTokens} tokens`;
+    if (state.archivedTurns != null) memoryLabel.textContent += ` · ${state.archivedTurns} turns on disk`;
+    const proposed = fileRequests.get(state.conversation);
+    filePermission.hidden = !proposed;
+    if (proposed) {
+      fileReason.textContent = proposed.reason;
+      fileQuery.textContent = 'Search: ' + proposed.query;
+    }
+    for (const button of [approveFiles, declineFiles, document.querySelector('#pick-file'), document.querySelector('#attach-path')]) {
+      button.disabled = busy;
+    }
+    attachmentList.replaceChildren();
+    for (const [index, file] of (attachmentDrafts.get(state.conversation) || []).entries()) {
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.textContent = file.name + ' ×';
+      remove.setAttribute('aria-label', 'Remove ' + file.name);
+      remove.disabled = busy;
+      remove.addEventListener('click', () => {
+        attachmentDrafts.get(state.conversation).splice(index, 1);
+        render();
+      });
+      attachmentList.append(remove);
+    }
+    prompt.readOnly = Boolean(proposed);
+    send.disabled = busy || state.pending || Boolean(proposed);
+    reset.disabled = busy;
+    retry.hidden = !state.pending;
+    retry.disabled = busy;
+    if (follow) scrollToLatest();
+  }
+
+  async function request(path, data) {
+    const response = await fetch(path, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Request failed.');
+    return result;
+  }
+
+  async function requestAnswer(data) {
+    const response = await fetch('/answer', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({...data, stream: true}),
+    });
+    if (!response.headers.get('Content-Type')?.includes('application/x-ndjson')) {
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Request failed.');
+      return result;
+    }
+    const stream = response.body.pipeThrough(new TextDecoderStream());
+    const reader = stream.getReader();
+    let buffer = '';
+    let result;
+    for (;;) {
+      const {value, done} = await reader.read();
+      if (done) break;
+      buffer += value;
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line) continue;
+        const event = JSON.parse(line);
+        if (event.error) throw new Error(event.error);
+        if (event.result) result = event.result;
+        if (event.search_query) status.textContent = `Search ${event.search_count}: “${event.search_query}”…`;
+        if (event.search_error) status.textContent = 'Research ended early. Generating with available evidence…';
+        if (event.reasoning_content) {
+          const follow = nearBottom();
+          status.textContent = 'Thinking…';
+          liveThinking.hidden = false;
+          liveReasoning.textContent += event.reasoning_content;
+          liveReasoning.scrollTop = liveReasoning.scrollHeight;
+          if (follow) scrollToLatest();
+        }
+        if (event.content) {
+          status.textContent = 'Generating reply…';
+          liveOutput.hidden = false;
+          liveText += event.content;
+          liveRenderTimer ??= setTimeout(paintLiveAnswer, 100);
+        }
+      }
+    }
+    if (!result) throw new Error('The reply stream ended early. Try sending the prompt again.');
+    return result;
+  }
+
+  async function compactTurn() {
+    status.textContent = 'Compacting conversation…';
+    const turn = state.turns.at(-1);
+    turn.id ??= crypto.randomUUID();
+    save();
+    const result = await request('/compact', {
+      summary: state.summary, prompt: turn.prompt, answer: turn.answer,
+      conversation: state.conversation, turn: turn.id,
+      sources: turn.sources ?? [],
+      context_pressure: (turn.diagnostics?.context_evictions ?? 0) > 0,
+    });
+    state.summary = result.summary;
+    state.memoryTokens = result.memory_tokens;
+    state.archivedTurns = result.archived_turns;
+    state.taskState = result.task_state;
+    turn.compactionDiagnostics = Object.fromEntries(
+      Object.entries(result.diagnostics ?? {}).map(([key, value]) => ['compaction_' + key, value]),
+    );
+    state.pending = false;
+    archived.delete(state.conversation);
+    const previousChats = [...archived];
+    archived.clear();
+    archived.set(state.conversation, state.turns[0].prompt);
+    for (const [id, title] of previousChats) archived.set(id, title);
+    save();
+    status.textContent = turn.limited
+      ? 'Context compacted. The reply reached its token limit.'
+      : 'Context compacted.';
+  }
+
+  async function run(operation) {
+    busy = true;
+    render();
+    try { await operation(); }
+    catch (error) { status.textContent = error.message; }
+    finally { busy = false; render(); }
+  }
+
+  function startReview(turn) {
+    if (busy || !turn.id || (state.pending && turn === state.turns.at(-1))) return;
+    run(async () => {
+      status.textContent = 'Reviewing the answer with Qwen…';
+      const result = await request('/review', {
+        conversation: state.conversation, turn: turn.id, files: reviewEvidence.get(turn) || [],
+      });
+      turn.review = result.review;
+      save();
+      status.textContent = 'Review saved.';
+    });
+  }
+
+  async function sendPrompt(text, decision = 'offer', matches = []) {
+      const attached = attachmentDrafts.get(state.conversation) || [];
+      const fileExcerpts = [...window.localFiles.fromAttachments(attached, text), ...matches].slice(0, 6);
+      const autoSearch = search.checked && !fileExcerpts.length && decision === 'offer';
+      status.textContent = autoSearch ? 'Checking your request…'
+        : mode.value === 'think' ? 'Thinking…' : 'Generating reply…';
+      liveThinking.hidden = true;
+      liveThinking.open = true;
+      liveUser.querySelector('pre').textContent = text;
+      liveUser.hidden = false;
+      empty.hidden = true;
+      prompt.value = '';
+      scrollToLatest();
+      let reply;
+      try {
+        reply = await requestAnswer({
+          summary: state.summary, prompt: text, mode: mode.value, auto_search: autoSearch,
+          conversation: state.conversation, files: fileExcerpts, file_search: decision,
+        });
+      } catch (error) {
+        if (!prompt.value) prompt.value = text;
+        throw error;
+      } finally {
+        liveUser.hidden = true;
+        liveThinking.hidden = true;
+        liveOutput.hidden = true;
+        liveReasoning.textContent = '';
+        clearTimeout(liveRenderTimer);
+        liveRenderTimer = undefined;
+        liveText = '';
+        liveAnswer.textContent = '';
+      }
+      if (reply.file_request) {
+        fileRequests.set(state.conversation, {...reply.file_request, prompt: text});
+        prompt.value = text;
+        status.textContent = 'Waiting for file search permission.';
+        return;
+      }
+      attachmentDrafts.delete(state.conversation);
+      const turn = {...reply, prompt: text};
+      reviewEvidence.set(turn, fileExcerpts);
+      state.turns.push(turn);
+      state.pending = true;
+      state.draft = prompt.value;
+      save();
+      render();
+      await compactTurn();
+  }
+
+  form.addEventListener('submit', event => {
+    event.preventDefault();
+    const text = prompt.value.trim();
+    if (!text || busy || state.pending || fileRequests.has(state.conversation)) return;
+    run(() => sendPrompt(text));
+  });
+
+  function attach(file) {
+    const files = attachmentDrafts.get(state.conversation) || [];
+    if (files.length >= 3) throw new Error('Attach up to three files per message.');
+    attachmentDrafts.set(state.conversation, [...files, file]);
+  }
+
+  document.querySelector('#pick-file').addEventListener('click', () => filePicker.click());
+  filePicker.addEventListener('change', () => {
+    const picked = [...filePicker.files];
+    filePicker.value = '';
+    if (busy || !picked.length) return;
+    run(async () => {
+      if ((attachmentDrafts.get(state.conversation)?.length || 0) + picked.length > 3) {
+        throw new Error('Attach up to three files per message.');
+      }
+      const files = await Promise.all(picked.map(file => window.localFiles.read(file)));
+      for (const file of files) attach(file);
+      status.textContent = '';
+    });
+  });
+  const attachPath = document.querySelector('#attach-path');
+  attachPath.addEventListener('click', () => {
+    const path = filePath.value.trim();
+    if (busy || !path) return;
+    run(async () => {
+      if ((attachmentDrafts.get(state.conversation)?.length || 0) >= 3) {
+        throw new Error('Attach up to three files per message.');
+      }
+      attach(await request('/files/open', {path}));
+      filePath.value = '';
+      status.textContent = '';
+      prompt.focus();
+    });
+  });
+  filePath.addEventListener('keydown', event => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      attachPath.click();
+    }
+  });
+  approveFiles.addEventListener('click', () => {
+    folderRequest = state.conversation;
+    folderPicker.click();
+  });
+  folderPicker.addEventListener('change', () => {
+    const selected = [...folderPicker.files];
+    folderPicker.value = '';
+    const proposed = fileRequests.get(state.conversation);
+    if (busy || !selected.length || !proposed || folderRequest !== state.conversation) return;
+    folderRequest = undefined;
+    run(async () => {
+      status.textContent = 'Searching the chosen folder…';
+      const found = await window.localFiles.fromFolder(selected, proposed.query);
+      fileRequests.delete(state.conversation);
+      await sendPrompt(proposed.prompt, found.excerpts.length ? 'approved' : 'empty', found.excerpts);
+      if (found.capped) status.textContent = 'Folder scan reached its local limit. Choose a smaller folder for a more focused search.';
+    });
+  });
+  declineFiles.addEventListener('click', () => {
+    const proposed = fileRequests.get(state.conversation);
+    if (busy || !proposed) return;
+    fileRequests.delete(state.conversation);
+    run(() => sendPrompt(proposed.prompt, 'declined'));
+  });
+
+  retry.addEventListener('click', () => run(compactTurn));
+  toggleSidebar.addEventListener('click', () => showSidebar(!sidebar.classList.contains('sidebar-open')));
+  prompt.addEventListener('keydown', event => {
+    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+      event.preventDefault();
+      if (!send.disabled) form.requestSubmit();
+    }
+  });
+  reset.addEventListener('click', () => {
+    if (busy) return;
+    saveOutgoing();
+    openChat({summary: '', turns: [], pending: false, conversation: crypto.randomUUID()});
+  });
+  try {
+    for (let index = 0; index < sessionStorage.length; index++) {
+      const storageKey = sessionStorage.key(index);
+      if (storageKey?.startsWith(cacheKey)) {
+        const cached = JSON.parse(sessionStorage.getItem(storageKey));
+        if (cached?.conversation && cached.conversation !== state.conversation) loaded.set(cached.conversation, cached);
+      }
+    }
+  } catch {}
+  prompt.value = state.draft || '';
+  render();
+  window.addEventListener('DOMContentLoaded', render, {once: true});
+  const initial = state;
+  fetch('/conversations').then(response => {
+    if (!response.ok) throw new Error('Could not load saved chats.');
+    return response.json();
+  }).then(async data => {
+    for (const chat of data.conversations) archived.set(chat.id, chat.title);
+    if (state === initial && !initial.turns.length && !busy && archived.has(initial.conversation)) {
+      const restored = await fetchArchive(initial.conversation);
+      if (state === initial && !busy && !prompt.value) openChat(restored);
+    }
+    render();
+  }).catch(error => { status.textContent = error.message; });
+</script>

@@ -1,0 +1,12 @@
+services:
+  searxng:
+    image: docker.io/searxng/searxng:latest
+    ports:
+      - "127.0.0.1:8888:8080"
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET:?Set SEARXNG_SECRET before starting SearXNG}
+    volumes:
+      - ./config:/etc/searxng
+      - cache:/var/cache/searxng
+volumes:
+  cache:
