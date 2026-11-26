@@ -124,6 +124,8 @@ python -X utf8 -E -B benchmarks/benchmark_large_repo.py
 
 The full run uses seeds 7, 19, and 42 at 4K. Use repeated `--case` or `--seed` arguments for a smaller run, such as `--case navigation --seed 7`. The CPython fixture must be installed by `.local-ai/agent-tasks/install.py` and remain clean at the pinned revision. Results and the runner log are written under the ignored `.local-ai/large-benchmark/` directory.
 
+The first full run retrieved all nine target definitions in its three lookup tasks, but the model answered the base HTML callback question incorrectly for all three seeds. It passed history recall 3/3, bug fixes 3/3 and two-file edits 3/3. Additive test writing passed 0/3: the model repeated an existing test in its insertion, and the AST validator rejected the duplicate. See [the local report](../.local-ai/large-benchmark/results.json) on the benchmark machine for prompts, evidence, diffs and token counts.
+
 ### Chat benchmark
 
 ```powershell
