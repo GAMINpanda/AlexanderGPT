@@ -50,6 +50,29 @@ class TerminalAgentTests(unittest.TestCase):
             self.session.propose("Update app.js.", hits, "")
         self.assertEqual(self.session.pending.updated, b"export const amount = 2;\n")
 
+    def test_repository_lookup_retries_uncited_answers_with_one_source(self):
+        hit = ({"name": "pricing.py", "line": 1, "text": self.original.decode().replace("\r\n", "\n")}, self.original)
+        answers = [
+            {"answer": "This is probably a Java discount handler."},
+            {"answer": "discount_price is defined at pricing.py:1."},
+        ]
+        with patch.object(self.session.workspace, "search", return_value=[hit]), \
+             patch.object(chat, "run_research", return_value={"evidence": [], "notes": "", "warning": ""}), \
+             patch.object(chat, "select_answer", side_effect=answers) as select:
+            result = self.session.run("Find the discount_price function in this codebase.")
+        self.assertEqual(select.call_count, 2)
+        self.assertIn("pricing.py:1", result["output"])
+
+    def test_repository_lookup_falls_back_to_source_pointer_if_retry_is_ungrounded(self):
+        hit = ({"name": "pricing.py", "line": 1, "text": self.original.decode().replace("\r\n", "\n"),
+                "definition": "discount_price", "definition_line": 1, "language": "Python"}, self.original)
+        answers = [{"answer": "An unrelated answer."}, {"answer": "Still no source citation."}]
+        with patch.object(self.session.workspace, "search", return_value=[hit]), \
+             patch.object(chat, "run_research", return_value={"evidence": [], "notes": "", "warning": ""}), \
+             patch.object(chat, "select_answer", side_effect=answers):
+            result = self.session.run("Find the discount_price function in this codebase.")
+        self.assertIn("discount_price at pricing.py:1", result["output"])
+
     def propose(self, name="pricing.py"):
         reply = {"message": {"content": json.dumps({
             "path": name, "start": 2, "end": 2, "new": "    return price - discount", "note": "Fix discount.",
@@ -176,6 +199,27 @@ class TerminalAgentTests(unittest.TestCase):
         self.assertIn("def available(stock, held)", prompt)
         self.assertIn("test_inventory.py", prompt)
 
+    def test_additive_test_drops_an_exact_duplicate_of_an_existing_test(self):
+        name = "test_inventory.py"
+        source = (
+            "import unittest\n\nclass InventoryTests(unittest.TestCase):\n"
+            "    def test_available_normally(self):\n        self.assertEqual(available(10, 3), 7)\n"
+        )
+        proposal = (
+            "    def test_available_normally(self):\n        self.assertEqual(available(10, 3), 7)\n"
+            "    def test_excess_holds(self):\n        self.assertEqual(available(2, 5), 0)"
+        )
+        hit = ({"name": name, "line": 1, "text": source}, source.encode())
+        reply = {"message": {"content": json.dumps({
+            "path": name, "start": 5, "end": 0, "new": proposal, "note": "Test excess holds.",
+        })}}
+        with patch.object(chat, "count_prompt", return_value=20), \
+             patch.object(chat, "complete", return_value=(reply, {})) as complete:
+            preview = self.session.propose("Add a regression test to test_inventory.py.", [hit], "")
+        self.assertEqual(complete.call_count, 1)
+        self.assertNotIn("+    def test_available_normally", preview)
+        self.assertIn("+    def test_excess_holds", preview)
+
     def test_complete_python_function_is_aligned_to_its_shown_definition(self):
         revised = self.original.decode().replace("\r\n", "\n").replace("price + discount", "price - discount")
         reply = {"message": {"content": json.dumps({
@@ -269,12 +313,14 @@ class TerminalAgentTests(unittest.TestCase):
         with patch.object(self.session.workspace, "search", return_value=hits), \
              patch.object(chat, "select_answer", side_effect=[
                  {"answer": "An answer without a citation."}, {"answer": "See pricing.py:1."},
+                 {"answer": "discount_price is defined in pricing.py:1."},
              ]) as answer:
             self.assertIn("pricing.py:1", self.session.run(prompt)["output"])
-        first, second = [call.args[0]["files"] for call in answer.call_args_list]
+        first, second, retry = [call.args[0]["files"] for call in answer.call_args_list]
         self.assertEqual(len(first), 1)
         self.assertIs(first[0]["focused"], chat.FOCUSED_FILE)
         self.assertEqual(len(second), 2)
+        self.assertEqual(len(retry), 1)
 
     def test_edit_prompt_adds_test_and_repair_instructions_only_when_needed(self):
         self.assertNotIn("Add a test by setting", agent.edit_instructions(False, False, ""))

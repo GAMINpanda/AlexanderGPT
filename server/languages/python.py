@@ -90,6 +90,30 @@ class PythonLanguage(LanguageProvider):
                 found.setdefault(name, []).append(ast.dump(node))
         return found
 
+    def normalize_addition(self, source, replacement):
+        """Drop exact copies of existing tests when a draft redundantly includes them."""
+        try:
+            existing = ast.parse(source)
+            proposed = ast.parse(dedent(replacement))
+        except (SyntaxError, RecursionError, ValueError):
+            return replacement
+        existing_by_name = {}
+        for node in ast.walk(existing):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
+                existing_by_name.setdefault(node.name, set()).add(ast.dump(node))
+        lines = replacement.splitlines(keepends=True)
+        remove = set()
+        for node in ast.walk(proposed):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or not node.name.startswith("test_"):
+                continue
+            if ast.dump(node) not in existing_by_name.get(node.name, set()):
+                continue
+            first = min([node.lineno, *(decorator.lineno for decorator in node.decorator_list)])
+            remove.update(range(first, node.end_lineno + 1))
+        if not remove:
+            return replacement
+        return "".join(line for number, line in enumerate(lines, 1) if number not in remove)
+
     def validate_edit(self, source, updated, *, test_task=False, baseline=None):
         try:
             tree = ast.parse(updated)

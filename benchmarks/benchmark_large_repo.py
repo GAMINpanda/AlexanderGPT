@@ -192,9 +192,11 @@ def citation_pass(task, answer):
     return content_pass and location_pass
 
 
-def navigation_trials(workspace, folder, seed, output):
+def navigation_trials(workspace, folder, seed, output, names=None):
     rows = []
     for task in NAVIGATION:
+        if names is not None and task["name"] not in names:
+            continue
         trial = Trial(workspace, f"{seed}-nav-{task['name']}", seed, output)
         result = trial.run(task["prompt"])
         target_found = False
@@ -206,6 +208,7 @@ def navigation_trials(workspace, folder, seed, output):
                 for hit in result["retrieval"]
             )
         result.update({"task": task["name"], "passed": citation_pass(task, result["answer"]),
+                       "source_fallback": result["answer"].startswith("I couldn't verify an explanation"),
                        "target_in_top_three": target_found})
         rows.append(result)
         trial.close()
@@ -279,7 +282,7 @@ def edit_trial(workspace, seed, output, task_name):
             try:
                 path.write_text(FILES["agent_bench_reservation.py"].replace("max(0, stock - held)", "stock - held"), encoding="utf-8")
                 mutated = subprocess.run(command, cwd=workspace.root, capture_output=True, text=True)
-                passed = mutated.returncode != 0 and "test_available_excess_holds" in mutated.stderr
+                passed = mutated.returncode != 0 and "test_available_returns_zero" in mutated.stderr
             finally:
                 path.write_bytes(good)
     elif task_name == "two_file":
@@ -306,7 +309,8 @@ def step_files(task):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--seed", action="append", type=int)
-    parser.add_argument("--case", action="append", choices=["navigation", "history", *EDIT_TASKS])
+    navigation_names = [task["name"] for task in NAVIGATION]
+    parser.add_argument("--case", action="append", choices=["navigation", *navigation_names, "history", *EDIT_TASKS])
     parser.add_argument("--output", type=Path, default=ROOT / ".local-ai" / "large-benchmark" / "results.json")
     parser.add_argument("--check-fixtures", action="store_true", help="Validate the pinned repository and tasks without model inference.")
     args = parser.parse_args()
@@ -331,6 +335,11 @@ def main():
             row = {"seed": seed, "workspace_files": len(workspace.names()), "navigation": [], "edits": []}
             if "navigation" in cases:
                 row["navigation"] = navigation_trials(workspace, Path(temporary), seed, args.output)
+            elif any(name in cases for name in navigation_names):
+                row["navigation"] = navigation_trials(
+                    workspace, Path(temporary), seed, args.output,
+                    {name for name in cases if name in navigation_names},
+                )
             if "history" in cases:
                 row["history"] = history_trial(workspace, seed, args.output)
             for task in EDIT_TASKS:
@@ -344,6 +353,7 @@ def main():
         "navigation_passed": sum(item["passed"] for row in report["runs"] for item in row["navigation"]),
         "navigation_attempts": sum(len(row["navigation"]) for row in report["runs"]),
         "retrieval_hits": sum(item["target_in_top_three"] for row in report["runs"] for item in row["navigation"] if "target_in_top_three" in item),
+        "navigation_source_fallbacks": sum(item.get("source_fallback", False) for row in report["runs"] for item in row["navigation"]),
         "history_passed": sum(row["history"]["passed"] for row in report["runs"] if "history" in row),
         "history_attempts": sum("history" in row for row in report["runs"]),
         "edits_passed": sum(item["passed"] for row in report["runs"] for item in row["edits"]),

@@ -78,6 +78,46 @@ def numbered(item):
     return {**item, "numbered": True, "text": text}
 
 
+def source_citations(answer, files):
+    citations = []
+    folded = answer.replace("\\", "/").casefold()
+    for item in files:
+        path = re.escape(item["name"].replace("\\", "/").casefold())
+        for match in re.finditer(rf"(?<![\w./-]){path}\s*:\s*(\d+)\b", folded):
+            line = int(match.group(1))
+            last = item["line"] + max(0, len(item["text"].splitlines()) - 1)
+            if item["line"] <= line <= last:
+                citations.append((item, line))
+    return citations
+
+
+def source_answer_supported(answer, prompt, files):
+    citations = source_citations(answer, files)
+    if not citations:
+        return False
+    if re.search(r"\b(?:definition|defined|method|function|class|handler|callback|symbol)\b", prompt, re.I):
+        definitions = [item for item in files if item.get("definition")]
+        if definitions:
+            target = definitions[0]
+            short_name = target["definition"].rsplit(".", 1)[-1].casefold()
+            return (short_name in answer.casefold() and any(
+                item["name"] == target["name"] and line == target["definition_line"]
+                for item, line in citations
+            ))
+    return True
+
+
+def source_pointer(files):
+    target = next((item for item in files if item.get("definition")), None)
+    if target:
+        return (f"I couldn't verify an explanation from the retrieved code. The relevant definition is "
+                f"{target['definition']} at {target['name']}:{target['definition_line']}.")
+    if files:
+        item = files[0]
+        return f"I couldn't verify an explanation from the retrieved code. The relevant excerpt starts at {item['name']}:{item['line']}."
+    return "I couldn't verify an answer from repository evidence."
+
+
 def focused_source(prompt, files):
     matches = re.findall(r"\bwhere\s+is\s+\x60?([a-z_]\w*)\x60?\s+defined\b", prompt, re.I)
     if len(prompt) > 180 or len(matches) != 1 or re.search(
@@ -439,6 +479,8 @@ class Session:
             raise ProposalError("Only LF line breaks are allowed in the replacement.")
         provider = language_for_path(name)
         if provider:
+            if adding_test:
+                new = provider.normalize_addition(source, new)
             first, last = provider.align_edit(source, new, first, last, start, end, adding_test)
         left, right = (first - 1, last) if last else (first, first)
         prefix, suffix = "".join(lines[:left]), "".join(lines[right:])
@@ -608,6 +650,19 @@ class Session:
         if not focused:
             answer = chat.select_answer({"mode": "auto", "files": evidence}, "", prompt, research, recalled,
                                         recent, {}, None, None)["answer"]
+            if action == "/ask" and not overview and not source_answer_supported(answer, prompt, files):
+                diagnostic.event("source_answer_retries")
+                source = next((item for item in files if item.get("definition")), files[0])
+                correction = (
+                    f"{prompt}\n\nYour previous answer was not supported by a citation to the retrieved code. "
+                    "Answer only from the single numbered excerpt below. For a definition, give its exact name "
+                    "and cite the definition line as path:line. If the excerpt does not establish the answer, say so."
+                )
+                answer = chat.select_answer({"mode": "quick", "files": [numbered(source)]}, "", correction,
+                                            research, recalled, recent, {}, None, None)["answer"]
+                if not source_answer_supported(answer, prompt, [source]):
+                    diagnostic.event("source_answer_fallbacks")
+                    answer = source_pointer([source])
         self.remember(prompt, answer, research["evidence"])
         sources = "\n".join(f"[{index}] {source['title']} — {source['url']}"
                             for index, source in enumerate(research["evidence"], 1))

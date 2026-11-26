@@ -31,5 +31,8 @@ class LanguageProvider:
     def insertion_anchor(self, source, shown_start, shown_end):
         return None
 
+    def normalize_addition(self, source, replacement):
+        return replacement
+
     def validate_edit(self, source, updated, *, test_task=False, baseline=None):
         return None
