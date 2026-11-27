@@ -116,16 +116,26 @@ class TerminalAgentTests(unittest.TestCase):
         hits = self.session.workspace.search("Find the login handler in this codebase", source_only=True)
         self.assertEqual([excerpt["name"] for excerpt, _ in hits], ["routes.py"])
 
-    def test_retry_passes_test_failure_at_most_once(self):
+    def test_retry_can_continue_after_each_failed_test(self):
         self.propose()
         self.session.apply(self.session.pending.id)
         self.session.test_command = [sys.executable, "-c", "print('expected 40'); raise SystemExit(1)"]
         self.assertIn("Test exit code 1", self.session.run("/test")["output"])
         with patch.object(self.session.workspace, "search", return_value=self.hits), \
-             patch.object(self.session, "propose", return_value="Retry diff") as propose:
+             patch.object(self.session, "propose", side_effect=["Retry diff one", "Retry diff two"]) as propose:
             self.assertIn("Retry diff", self.session.run("/retry")["output"])
-            self.assertIn("one retry", self.session.run("/retry")["output"])
-        propose.assert_called_once_with("Fix discount_price.", self.hits, "expected 40\n")
+            self.session.pending = None
+            self.assertIn("Retry diff two", self.session.run("/retry")["output"])
+        self.assertEqual(propose.call_count, 2)
+        propose.assert_called_with("Fix discount_price.", self.hits, "expected 40\n")
+
+    def test_retry_stops_when_task_budget_is_exhausted(self):
+        self.session.task_active = True
+        self.session.task_calls = context.CALLS
+        self.session.last_task = "Fix discount_price."
+        self.session.last_failure = "expected 40"
+        result = self.session.run("/retry")["output"]
+        self.assertIn("Task repair budget exhausted", result)
 
     def test_invalid_edit_retries_once_with_validation_feedback(self):
         def draft(line):
@@ -144,6 +154,88 @@ class TerminalAgentTests(unittest.TestCase):
         self.assertEqual(properties["path"]["enum"], ["pricing.py", ""])
         self.assertEqual(properties["start"]["enum"], [1, 2])
         self.assertEqual(self.source.read_bytes(), self.original)
+
+    def test_validation_feedback_repeats_until_a_valid_proposal_within_budget(self):
+        token = chat.DIAGNOSTICS.set(context.Diagnostics(call_limit=4, generated_limit=2048))
+        try:
+            with patch.object(context, "EXTRA", 2), patch.object(self.session, "draft", side_effect=[
+                agent.ProposalError("bad range one"), agent.ProposalError("bad range two"), "valid proposal",
+            ]) as draft:
+                result = self.session.propose("Fix the total.", self.hits, "")
+            self.assertEqual(result, "valid proposal")
+            self.assertEqual(draft.call_count, 3)
+            self.assertIn("bad range two", draft.call_args.args[3])
+        finally:
+            chat.DIAGNOSTICS.reset(token)
+
+    def test_rejected_retry_proposal_is_recalled_on_the_next_retry(self):
+        self.session.validation_failure = "Use a valid line range."
+        self.session.rejected_proposal = '{"start": 20}'
+        with patch.object(self.session, "draft", return_value="valid retry") as draft:
+            result = self.session.propose("Fix the total.", self.hits, "test failure output")
+        self.assertEqual(result, "valid retry")
+        self.assertEqual(draft.call_args.args[3:], ("Use a valid line range.", '{"start": 20}'))
+        self.assertEqual(self.session.validation_failure, "")
+
+    def test_code_repair_prompt_preserves_existing_test_expectations(self):
+        prompt = agent.edit_instructions(False, False, "AssertionError: expected True", True)
+        self.assertIn("Preserve the expectations of every existing test", prompt)
+        self.assertIn("do not edit, remove, or weaken tests", prompt)
+
+    def test_implementation_prompt_preserves_unchanged_behavior(self):
+        prompt = agent.edit_instructions(False, False, "")
+        self.assertIn("Preserve existing behavior, valid cases, error behavior, and tests", prompt)
+
+    def test_natural_implementation_request_in_empty_repo_proposes_and_applies_new_file(self):
+        empty = self.root / "empty-repo"
+        empty.mkdir()
+        subprocess.run(["git", "init", "-q", str(empty)], check=True)
+        memory = ChatMemory(empty / ".agent-test.sqlite3")
+        session = agent.Session(agent.Workspace(empty), None, memory, "fresh-repo")
+        source = "def sort_list(values):\n    return sorted(values)\n"
+        answer = {"message": {"content": json.dumps({
+            "path": "sort_list.py", "content": source, "note": "Add a reusable list sorting function.",
+        })}}
+        request = "hello, this is a fresh repo. Could you please implement some python code to sort a list"
+        with patch.object(session.workspace, "search", return_value=[]), \
+             patch.object(session.workspace, "names", return_value=[]), \
+             patch.object(chat, "count_prompt", return_value=40), \
+             patch.object(chat, "complete", return_value=(answer, {})) as complete:
+            result = session.run(request)["output"]
+        target = empty / "sort_list.py"
+        self.assertIn("Proposed new file", result)
+        self.assertIn("Applied sort_list.py", result)
+        self.assertIn("+def sort_list", result)
+        self.assertTrue(target.exists())
+        self.assertEqual(complete.call_args.kwargs["schema"], agent.NEW_FILE_SCHEMA)
+        self.assertEqual(target.read_text(encoding="utf-8"), source)
+
+    def test_new_file_apply_does_not_overwrite_a_path_created_after_preview(self):
+        target = self.root / "new_module.py"
+        target.write_text("existing = True\n", encoding="utf-8")
+        self.session.pending = agent.Edit("new-id", target.name, b"", b"new = True\n", "", "Create it", True)
+        with self.assertRaisesRegex(ValueError, "path now exists"):
+            self.session.apply("new-id")
+        self.assertEqual(target.read_text(encoding="utf-8"), "existing = True\n")
+
+    def test_coding_request_classifier_avoids_explanatory_questions(self):
+        self.assertTrue(agent.asks_to_change_code(
+            "Could you please implement some python code to sort a list?"))
+        self.assertFalse(agent.asks_to_change_code("Could you explain how to implement a sorting function?"))
+
+    def test_identical_rejected_draft_stops_validation_retries(self):
+        token = chat.DIAGNOSTICS.set(context.Diagnostics(call_limit=8, generated_limit=2048))
+        try:
+            def repeated(*_args):
+                self.session.last_proposal = '{"path":"pricing.py","start":2,"end":2}'
+                raise agent.ProposalError("The replacement does not change the file.")
+
+            with patch.object(context, "EXTRA", 4), patch.object(self.session, "draft", side_effect=repeated) as draft:
+                with self.assertRaisesRegex(agent.ProposalError, "Repeated identical proposal"):
+                    self.session.propose("Fix the total.", self.hits, "test failed")
+            self.assertEqual(draft.call_count, 2)
+        finally:
+            chat.DIAGNOSTICS.reset(token)
 
     def test_syntax_retry_reports_error_location_and_kind(self):
         def draft(new):

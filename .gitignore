@@ -42,6 +42,7 @@
 !/benchmarks/benchmark_harness.py
 !/benchmarks/benchmark_edits.py
 !/benchmarks/benchmark_large_repo.py
+!/benchmarks/benchmark_long_tasks.py
 
 /docs/*
 !/docs/HARNESS.md

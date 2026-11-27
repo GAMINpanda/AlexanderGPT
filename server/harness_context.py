@@ -37,6 +37,8 @@ class BudgetError(ValueError):
 @dataclass
 class Diagnostics:
     started: float = field(default_factory=monotonic)
+    call_limit: int | None = None
+    generated_limit: int | None = None
     calls: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
@@ -48,9 +50,11 @@ class Diagnostics:
         self.events[key] = self.events.get(key, 0) + amount
 
     def start(self, limit, reserve=0, reserve_calls=0):
-        if self.calls + reserve_calls >= CALLS:
+        call_limit = CALLS if self.call_limit is None else self.call_limit
+        generated_limit = GENERATED if self.generated_limit is None else self.generated_limit
+        if self.calls + reserve_calls >= call_limit:
             raise BudgetError("Inference call budget exhausted.")
-        if self.reservations + limit + reserve > GENERATED:
+        if self.reservations + limit + reserve > generated_limit:
             raise BudgetError("Generation budget exhausted.")
         self.calls += 1
         self.reservations += limit
